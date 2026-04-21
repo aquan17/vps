@@ -1,0 +1,2 @@
+[2026-04-21 13:16:48] local.ERROR: Create VPS system error {"user_id":1,"project_id":"vps2-493707","zone":"asia-southeast1-b","machine_type":"e2-standard-2","name":"vps-l5iwz","message":"SERVICE UNAVAILABLE"} 
+[2026-04-21 13:17:10] local.ERROR: Create VPS system error {"user_id":1,"project_id":"vps2-493707","zone":"asia-southeast1-b","machine_type":"e2-standard-2","name":"vps-f84rw","message":"SERVICE UNAVAILABLE"} 

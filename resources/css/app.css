@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --color-primary: #2563eb;
+        --color-success: #059669;
+        --color-warning: #d97706;
+        --color-danger: #e11d48;
+        --color-surface: #ffffff;
+        --color-page: #f8fafc;
+        --color-text: #0f172a;
+        --color-muted: #64748b;
+    }
+
+    body {
+        text-rendering: optimizeLegibility;
+    }
+
+    [x-cloak] {
+        display: none !important;
+    }
+}
+
+@layer components {
+    .ui-focus {
+        @apply focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2;
+    }
+}
