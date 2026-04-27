@@ -7,7 +7,7 @@
 @section('content')
 @php
     $instances = $instances ?? collect();
-    $runningCount = $instances->whereIn('status', ['Đang chạy', 'RUNNING'])->count();
+    $runningCount = $instances->whereIn('status', ['Sẵn sàng', 'Đang chạy', 'RUNNING'])->count();
 @endphp
 
 <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-4">
@@ -70,7 +70,7 @@
                         <td class="font-monospace small">{{ $vps->machine_type }}</td>
                         <td class="font-monospace small">{{ $vps->public_ip ?? 'Đang chờ IP...' }}</td>
                         <td>
-                            <span class="badge rounded-pill {{ in_array($vps->status, ['Đang chạy', 'RUNNING']) ? 'text-bg-success' : 'text-bg-warning' }}">
+                            <span class="badge rounded-pill {{ in_array($vps->status, ['Sẵn sàng', 'Đang chạy', 'RUNNING']) ? 'text-bg-success' : 'text-bg-warning' }}">
                                 {{ $vps->status }}
                             </span>
                         </td>

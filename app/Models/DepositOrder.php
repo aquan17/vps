@@ -15,6 +15,7 @@ class DepositOrder extends Model
         'amount',
         'status',
         'provider',
+        'provider_order_code',
         'transaction_ref',
         'raw_payload',
         'paid_at',

@@ -15,6 +15,7 @@
 <div class="relative h-full">
     <button
         type="button"
+        x-bind:disabled="submitting"
         x-on:click="selectPlan('{{ $id }}')"
         x-bind:class="plan === '{{ $id }}' ? 'border-brand-600 bg-brand-50 ring-2 ring-brand-100' : 'border-slate-200 bg-white'"
         class="block h-full w-full cursor-pointer rounded-card border p-5 text-left shadow-sm transition-colors hover:border-brand-300"

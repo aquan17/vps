@@ -37,7 +37,7 @@ class DeleteExpiredVps extends Command
 
                 $gcpService->setProjectSettings(
                     $vps->gcpProject->project_id,
-                    $vps->gcpProject->credentials_file
+                    $vps->gcpProject->credentials_path
                 );
 
                 if (!$gcpService->deleteInstance($vps->name, $vps->zone)) {

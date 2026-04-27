@@ -46,7 +46,7 @@
         </x-ui.button>
     </x-ui.page-header>
 
-    <form action="{{ route('vps.store') }}" method="POST" x-on:submit="submitting = true">
+    <form action="{{ route('vps.store') }}" method="POST" x-on:submit="if (submitting) { $event.preventDefault(); return; } submitting = true">
         @csrf
 
         <div class="vps-create-layout grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -141,6 +141,7 @@
                                 @foreach($durationOptions as $days => $label)
                                     <button
                                         type="button"
+                                        x-bind:disabled="submitting"
                                         class="flex min-h-10 items-center justify-center rounded-lg border px-3 text-center text-sm font-semibold transition-colors"
                                         x-on:click="duration = {{ $days }}"
                                         x-bind:class="Number(duration) === {{ $days }} ? 'border-brand-600 bg-brand-50 text-brand-700 ring-2 ring-brand-100' : 'border-slate-300 bg-white text-slate-700 hover:border-brand-300'"
@@ -163,6 +164,7 @@
                                 @endphp
                                 <button
                                     type="button"
+                                    x-bind:disabled="submitting"
                                     class="flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 text-left text-sm font-semibold transition-colors"
                                     x-on:click="zone = '{{ $zoneData['id'] }}'"
                                     x-bind:class="zone === '{{ $zoneData['id'] }}' ? 'border-brand-600 bg-brand-50 text-brand-700 ring-2 ring-brand-100' : 'border-slate-300 bg-white text-slate-700 hover:border-brand-300'"
@@ -173,6 +175,7 @@
                             @empty
                                 <button
                                     type="button"
+                                    x-bind:disabled="submitting"
                                     class="flex min-h-11 items-center justify-between gap-2 rounded-lg border px-3 text-left text-sm font-semibold transition-colors"
                                     x-on:click="zone = 'asia-southeast1-b'"
                                     x-bind:class="zone === 'asia-southeast1-b' ? 'border-brand-600 bg-brand-50 text-brand-700 ring-2 ring-brand-100' : 'border-slate-300 bg-white text-slate-700 hover:border-brand-300'"
@@ -228,8 +231,80 @@
             </div>
         </div>
     </form>
+
+    <div
+        class="vps-create-loading-overlay"
+        x-show="submitting"
+        x-cloak
+        role="alert"
+        aria-live="assertive"
+        aria-busy="true"
+    >
+        <div class="vps-create-loading-panel">
+            <div class="vps-create-loading-spinner" aria-hidden="true"></div>
+            <div class="vps-create-loading-title">Đang tạo VPS...</div>
+            <div class="vps-create-loading-text">Vui lòng giữ nguyên trang này cho đến khi hoàn tất.</div>
+        </div>
+    </div>
 </div>
 @endsection
+
+@push('styles')
+<style>
+    .vps-create-loading-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(15, 23, 42, 0.68);
+        backdrop-filter: blur(6px);
+        cursor: wait;
+    }
+
+    .vps-create-loading-panel {
+        width: min(100%, 360px);
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 12px;
+        background: #ffffff;
+        padding: 28px 24px;
+        text-align: center;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+    }
+
+    .vps-create-loading-spinner {
+        width: 48px;
+        height: 48px;
+        margin: 0 auto 18px;
+        border: 4px solid #dbeafe;
+        border-top-color: #2563eb;
+        border-radius: 9999px;
+        animation: vps-create-spin 0.8s linear infinite;
+    }
+
+    .vps-create-loading-title {
+        color: #0f172a;
+        font-size: 18px;
+        font-weight: 800;
+        line-height: 1.35;
+    }
+
+    .vps-create-loading-text {
+        margin-top: 8px;
+        color: #64748b;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    @keyframes vps-create-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+</style>
+@endpush
 
 @push('scripts')
 <script>

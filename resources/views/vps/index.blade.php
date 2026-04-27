@@ -6,7 +6,7 @@
 
 @section('content')
 @php
-    $runningCount = $instances->whereIn('status', ['Đang chạy', 'RUNNING'])->count();
+    $runningCount = $instances->whereIn('status', ['Sẵn sàng', 'Đang chạy', 'RUNNING'])->count();
     $pendingCount = max(0, $instances->count() - $runningCount);
 @endphp
 

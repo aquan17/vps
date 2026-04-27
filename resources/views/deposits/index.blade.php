@@ -15,7 +15,7 @@
     subtitle="Tạo mã VietQR riêng cho từng giao dịch để hệ thống tự đối soát."
 />
 
-<div class="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+<div class="grid gap-4 sm:gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
     <x-ui.card title="Tạo lệnh nạp" subtitle="Chuyển khoản đúng số tiền và nội dung để được cộng tự động." padding="lg" class="deposit-card">
         <form action="{{ route('deposits.store') }}" method="POST" class="space-y-4">
             @csrf
@@ -37,7 +37,7 @@
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-2">
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-2">
                 @foreach([50000, 100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000] as $amount)
                     <button
                         type="button"
@@ -74,7 +74,7 @@
                 <article class="rounded-card border border-slate-200 bg-white p-4">
                     <div class="mb-3 flex items-start justify-between gap-3">
                         <div class="min-w-0">
-                            <div class="truncate font-mono text-sm font-bold text-slate-950">{{ $order->code }}</div>
+                            <div class="break-all font-mono text-sm font-bold text-slate-950">{{ $order->code }}</div>
                             <div class="mt-1 text-xs text-slate-500">{{ $order->created_at->format('d/m/Y H:i') }}</div>
                         </div>
                         <x-ui.badge :variant="$order->status === 'paid' ? 'success' : 'warning'">
@@ -89,35 +89,42 @@
             @endforelse
         </div>
 
-        <div class="hidden overflow-x-auto lg:block">
-            <table class="min-w-full border-collapse">
+        <div class="hidden lg:block">
+            <table class="deposit-history-table w-full table-fixed border-collapse">
+                <colgroup>
+                    <col class="w-[34%]">
+                    <col class="w-[22%]">
+                    <col class="w-[24%]">
+                    <col class="w-[20%]">
+                </colgroup>
                 <thead>
                     <tr class="border-b border-slate-200 bg-slate-50">
-                        <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Mã nạp</th>
-                        <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Số tiền</th>
-                        <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Trạng thái</th>
-                        <th class="px-5 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Thời gian</th>
-                        <th class="px-5 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-500">QR</th>
+                        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Mã nạp</th>
+                        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Số tiền</th>
+                        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-500">Trạng thái</th>
+                        <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide text-slate-500">Thao tác</th>
                     </tr>
                 </thead>
                 <tbody>
                     @forelse($orders as $order)
                         <tr class="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
-                            <td class="px-5 py-4 font-mono text-sm font-bold text-slate-950">{{ $order->code }}</td>
-                            <td class="px-5 py-4 font-mono text-sm font-bold text-brand-700">{{ number_format($order->amount, 0, ',', '.') }} VND</td>
-                            <td class="px-5 py-4">
-                                <x-ui.badge :variant="$order->status === 'paid' ? 'success' : 'warning'">
-                                    {{ $order->status === 'paid' ? 'Đã thanh toán' : 'Chờ chuyển khoản' }}
-                                </x-ui.badge>
+                            <td class="px-4 py-4">
+                                <div class="truncate font-mono text-sm font-bold text-slate-950">{{ $order->code }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ $order->created_at->format('d/m/Y H:i') }}</div>
                             </td>
-                            <td class="px-5 py-4 text-sm text-slate-600">{{ $order->created_at->format('d/m/Y H:i') }}</td>
-                            <td class="px-5 py-4 text-right">
-                                <x-ui.button :href="route('deposits.show', $order->id)" variant="secondary" size="sm">Xem</x-ui.button>
+                            <td class="px-4 py-4 font-mono text-sm font-bold text-brand-700">{{ number_format($order->amount, 0, ',', '.') }} VND</td>
+                            <td class="px-4 py-4">
+                                <span class="deposit-status-pill {{ $order->status === 'paid' ? 'is-paid' : 'is-pending' }}">
+                                    {{ $order->status === 'paid' ? 'Đã thanh toán' : 'Chờ chuyển khoản' }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-4 text-right">
+                                <x-ui.button :href="route('deposits.show', $order->id)" variant="secondary" size="sm">Xem QR</x-ui.button>
                             </td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" class="px-5 py-10 text-center text-sm text-slate-500">Chưa có lệnh nạp nào.</td>
+                            <td colspan="4" class="px-5 py-10 text-center text-sm text-slate-500">Chưa có lệnh nạp nào.</td>
                         </tr>
                     @endforelse
                 </tbody>
@@ -133,9 +140,84 @@
         padding: 16px 24px;
     }
 
+    .deposit-card {
+        min-width: 0;
+    }
+
+    .deposit-option {
+        min-width: 0;
+        white-space: nowrap;
+    }
+
+    .deposit-card strong {
+        word-break: break-word;
+    }
+
+    .deposit-card article {
+        min-width: 0;
+    }
+
+    .deposit-history-table th,
+    .deposit-history-table td {
+        min-width: 0;
+        vertical-align: middle;
+    }
+
+    .deposit-status-pill {
+        display: inline-flex;
+        max-width: 100%;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap;
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+    }
+
+    .deposit-status-pill.is-paid {
+        background: #dcfce7;
+        color: #15803d;
+    }
+
+    .deposit-status-pill.is-pending {
+        background: #fef3c7;
+        color: #b45309;
+    }
+
     @media (max-width: 768px) {
         .deposit-card > .border-b {
             padding: 14px 18px;
+        }
+
+        .deposit-card {
+            border-radius: 14px;
+        }
+
+        .deposit-option {
+            font-size: 13px;
+            padding-left: 10px;
+            padding-right: 10px;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .deposit-card > .border-b {
+            padding: 12px 14px;
+        }
+
+        .deposit-card .p-4 {
+            padding: 12px;
+        }
+
+        .deposit-card .mt-5.rounded-card {
+            margin-top: 14px;
+        }
+
+        .deposit-option {
+            min-height: 38px;
+            font-size: 12px;
         }
     }
 </style>

@@ -30,6 +30,10 @@
         @csrf
         <x-ui.button type="submit" variant="secondary">Đồng bộ quota</x-ui.button>
     </form>
+    <form action="{{ route('admin.gcloud.sync-vps') }}" method="POST" class="m-0">
+        @csrf
+        <x-ui.button type="submit" variant="secondary">Đồng bộ VPS</x-ui.button>
+    </form>
     <x-ui.button type="button" variant="primary" data-bs-toggle="modal" data-bs-target="#addGcpModal">
         + Thêm account
     </x-ui.button>
@@ -93,16 +97,16 @@
 
     <x-ui.card class="admin-gcloud-card overflow-hidden" padding="none">
         <x-slot name="header">
-            <div class="flex items-start justify-between gap-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                 <div>
                     <h2 class="mb-0.5 text-base font-bold text-slate-950">Google Cloud projects</h2>
                     <p class="mb-0 text-xs text-slate-500">{{ $projectCount }} account trong cụm cấp phát.</p>
                 </div>
-                <x-ui.badge variant="primary">{{ $projectCount }} projects</x-ui.badge>
+                <x-ui.badge variant="primary" class="self-start sm:self-auto">{{ $projectCount }} projects</x-ui.badge>
             </div>
         </x-slot>
 
-        <div class="grid gap-3 p-4 lg:hidden">
+        <div class="gcloud-project-scroll grid gap-3 p-4 lg:hidden">
             @forelse($projects as $pj)
                 @php
                     $cpuPct = $pj['cpu_limit'] > 0 ? min(100, round(($pj['cpu_used'] / $pj['cpu_limit']) * 100)) : 0;
@@ -139,7 +143,7 @@
                         </div>
                     </div>
 
-                    <div class="mt-4 grid grid-cols-2 gap-2">
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <form action="{{ route('admin.gcloud.toggle', $pj['id']) }}" method="POST" class="m-0">
                             @csrf
                             @method('PATCH')
@@ -163,7 +167,7 @@
             @endforelse
         </div>
 
-        <div class="hidden overflow-x-auto lg:block">
+        <div class="gcloud-project-scroll hidden w-full overflow-x-auto lg:block">
             <table class="gcloud-table min-w-full border-collapse">
                 <thead>
                     <tr class="border-b border-slate-200 bg-slate-50">
@@ -243,21 +247,21 @@
 
     <x-ui.card class="admin-gcloud-card overflow-hidden" padding="none">
         <x-slot name="header">
-            <div class="flex items-start justify-between gap-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                 <div>
                     <h2 class="mb-0.5 text-base font-bold text-slate-950">VPS trong hệ thống</h2>
                     <p class="mb-0 text-xs text-slate-500">{{ $allInstances->count() }} máy chủ đang được quản lý.</p>
                 </div>
-                <x-ui.badge variant="primary">{{ $allInstances->count() }} instances</x-ui.badge>
+                <x-ui.badge variant="primary" class="self-start sm:self-auto">{{ $allInstances->count() }} instances</x-ui.badge>
             </div>
         </x-slot>
 
         <div class="grid gap-3 p-4 lg:hidden">
             @forelse($allInstances as $instance)
                 @php
-                    $expiresAt = $instance->expires_at
-                        ? $instance->expires_at->timezone('Asia/Ho_Chi_Minh')->format('d/m/Y H:i')
-                        : '-';
+                    $expiresDate = $instance->expires_at
+                        ? $instance->expires_at->timezone('Asia/Ho_Chi_Minh')->format('Y-m-d')
+                        : '';
                 @endphp
                 <article class="gcloud-instance-card">
                     <div class="mb-3 flex items-start justify-between gap-3">
@@ -268,25 +272,31 @@
                         <x-ui.badge :status="$instance->status">{{ $instance->status }}</x-ui.badge>
                     </div>
                     <div class="grid grid-cols-2 gap-3 text-xs">
-                        <div>
+                        <div class="min-w-0">
                             <span class="gcloud-mobile-label">Cấu hình</span>
-                            <strong class="mt-1 block font-mono text-slate-800">{{ strtoupper($instance->machine_type) }}</strong>
-                            <span class="mt-0.5 block text-slate-500">{{ $instance->cpu }}C · {{ $instance->ram }}GB · {{ $instance->disk }}GB</span>
+                            <strong class="mt-1 block truncate font-mono text-slate-800" title="{{ strtoupper($instance->machine_type) }}">{{ strtoupper($instance->machine_type) }}</strong>
+                            <span class="mt-0.5 block truncate text-slate-500">{{ $instance->cpu }}C · {{ $instance->ram }}GB · {{ $instance->disk }}GB</span>
                         </div>
-                        <div class="text-right">
+                        <div class="min-w-0 text-right">
                             <span class="gcloud-mobile-label">IP</span>
-                            <strong class="mt-1 block font-mono text-slate-800">{{ $instance->public_ip ?? 'Pending...' }}</strong>
-                            <span class="mt-0.5 block text-slate-500">{{ strtoupper($instance->os ?? 'ubuntu') }}</span>
+                            <strong class="mt-1 block truncate font-mono text-slate-800" title="{{ $instance->public_ip ?? 'Pending...' }}">{{ $instance->public_ip ?? 'Pending...' }}</strong>
+                            <span class="mt-0.5 block truncate text-slate-500">{{ strtoupper($instance->os ?? 'ubuntu') }}</span>
                         </div>
                     </div>
-                    <div class="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                        <span class="text-xs font-semibold text-slate-500">Hết hạn: {{ $expiresAt }}</span>
-                        <div class="flex gap-2">
-                            <x-ui.button :href="route('vps.show', $instance->id)" size="sm">Quản lý</x-ui.button>
-                            <form action="{{ route('vps.destroy', $instance->id) }}" method="POST" class="m-0" onsubmit="return confirm('Xóa VPS ' + @json($instance->name) + '?');">
+                    <div class="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                        <form action="{{ route('admin.gcloud.vps.expires-at', $instance->id) }}" method="POST" class="gcloud-expiry-form m-0 w-full sm:w-auto">
+                            @csrf
+                            @method('PATCH')
+                            <span class="gcloud-expiry-label">Hết hạn</span>
+                            <input type="date" name="expires_at" value="{{ $expiresDate }}" class="gcloud-date-input" required>
+                            <x-ui.button type="submit" variant="secondary" size="sm">Lưu</x-ui.button>
+                        </form>
+                        <div class="grid grid-cols-2 gap-2 w-full sm:w-auto sm:flex sm:gap-2">
+                            <x-ui.button :href="route('vps.show', $instance->id)" size="sm" class="w-full justify-center">Quản lý</x-ui.button>
+                            <form action="{{ route('vps.destroy', $instance->id) }}" method="POST" class="m-0 w-full" onsubmit="return confirm('Xóa VPS ' + @json($instance->name) + '?');">
                                 @csrf
                                 @method('DELETE')
-                                <x-ui.button type="submit" variant="danger" size="sm">Xóa</x-ui.button>
+                                <x-ui.button type="submit" variant="danger" size="sm" class="w-full justify-center">Xóa</x-ui.button>
                             </form>
                         </div>
                     </div>
@@ -296,7 +306,7 @@
             @endforelse
         </div>
 
-        <div class="hidden overflow-x-auto lg:block">
+        <div class="hidden w-full overflow-x-auto lg:block">
             <table class="gcloud-table min-w-full border-collapse">
                 <thead>
                     <tr class="border-b border-slate-200 bg-slate-50">
@@ -310,6 +320,11 @@
                 </thead>
                 <tbody>
                     @forelse($allInstances as $instance)
+                        @php
+                            $expiresDate = $instance->expires_at
+                                ? $instance->expires_at->timezone('Asia/Ho_Chi_Minh')->format('Y-m-d')
+                                : '';
+                        @endphp
                         <tr class="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
                             <td class="px-5 py-4">
                                 <div class="font-bold text-slate-950">{{ $instance->user->name ?? 'Unknown' }}</div>
@@ -328,7 +343,12 @@
                                 <x-ui.badge :status="$instance->status">{{ $instance->status }}</x-ui.badge>
                             </td>
                             <td class="px-5 py-4">
-                                <span class="text-sm font-semibold text-slate-600">{{ $instance->expires_at ? $instance->expires_at->timezone('Asia/Ho_Chi_Minh')->format('d/m/Y H:i') : '-' }}</span>
+                                <form action="{{ route('admin.gcloud.vps.expires-at', $instance->id) }}" method="POST" class="gcloud-expiry-form m-0">
+                                    @csrf
+                                    @method('PATCH')
+                                    <input type="date" name="expires_at" value="{{ $expiresDate }}" class="gcloud-date-input" required>
+                                    <x-ui.button type="submit" variant="secondary" size="sm">Lưu</x-ui.button>
+                                </form>
                             </td>
                             <td class="px-5 py-4">
                                 <div class="flex justify-end gap-2">
@@ -541,6 +561,19 @@
         border-radius: 8px;
         background: #ffffff;
         padding: 14px;
+        max-width: 100%;
+        overflow: hidden;
+    }
+
+    .gcloud-project-scroll {
+        max-height: min(620px, 68vh);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
+    }
+
+    .gcloud-instance-card .truncate {
+        max-width: 100%;
     }
 
     .gcloud-meter-head {
@@ -559,15 +592,46 @@
         white-space: nowrap;
     }
 
+    .gcloud-expiry-form {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .gcloud-expiry-label {
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        color: #64748b;
+    }
+
+    .gcloud-date-input {
+        min-height: 36px;
+        width: 150px;
+        max-width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 0 10px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #334155;
+    }
+
     .gcloud-table th {
         padding-top: 12px;
         padding-bottom: 12px;
+        white-space: nowrap;
     }
 
     .gcloud-table td {
         padding-top: 14px;
         padding-bottom: 14px;
         vertical-align: middle;
+        white-space: nowrap;
     }
 
     .gcloud-empty-state {
@@ -586,6 +650,10 @@
         border-radius: 8px;
         background: #f8fafc;
         padding: 12px;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     @media (max-width: 1024px) {
@@ -596,7 +664,7 @@
 
     @media (max-width: 768px) {
         .gcloud-stat-card {
-            min-height: 106px;
+            min-height: auto;
             padding: 14px;
         }
 
@@ -605,12 +673,79 @@
         }
 
         .gcloud-cluster-grid {
-            padding: 14px;
-            gap: 14px;
+            padding: 16px;
+            gap: 16px;
         }
 
         .gcloud-cluster-mini {
             grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 480px) {
+        .gcloud-stat-card > .flex > div:last-child {
+            font-size: 18px;
+        }
+        
+        .gcloud-cluster-mini {
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+        
+        .gcloud-cluster-mini div {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 14px;
+        }
+        
+        .gcloud-cluster-mini span {
+            margin-top: 0;
+            font-size: 11px;
+        }
+
+        .gcloud-instance-card {
+            padding: 12px;
+        }
+
+        .gcloud-instance-card > .mb-3 {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .gcloud-instance-card > .grid {
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        .gcloud-instance-card > .grid > .text-right {
+            text-align: left;
+        }
+
+        .gcloud-instance-card > .mt-3 {
+            align-items: stretch;
+        }
+
+        .gcloud-expiry-form {
+            width: 100%;
+        }
+
+        .gcloud-date-input {
+            flex: 1 1 auto;
+            width: auto;
+            min-width: 0;
+        }
+
+        .gcloud-instance-card > .mt-3 > .grid {
+            grid-template-columns: 1fr;
+            width: 100%;
+        }
+
+        .gcloud-instance-card > .mt-3 a,
+        .gcloud-instance-card > .mt-3 button {
+            width: 100%;
+            min-width: 0;
         }
     }
 </style>

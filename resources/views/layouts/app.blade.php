@@ -342,6 +342,9 @@
             <a href="{{ route('admin.revenue') }}" class="nav-item {{ request()->routeIs('admin.revenue') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
                 <span class="nav-icon">📊</span> Doanh thu
             </a>
+            <a href="{{ route('admin.users') }}" class="nav-item {{ request()->routeIs('admin.users*') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
+                <span class="nav-icon">👥</span> Người dùng
+            </a>
             <a href="{{ route('admin.google-cloud') }}" class="nav-item {{ request()->routeIs('admin.google-cloud') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
                 <span class="nav-icon">☁️</span> Google Cloud
             </a>
@@ -372,6 +375,7 @@
                 @elseif(request()->routeIs('vps.create')) ➕ Tạo VPS Mới
                 @elseif(request()->routeIs('vps.show')) 📋 Chi tiết VPS
                 @elseif(request()->routeIs('admin.revenue')) 📊 Doanh thu
+                @elseif(request()->routeIs('admin.users*')) 👥 Người dùng
                 @elseif(request()->routeIs('admin.google-cloud')) ☁️ 
                 @elseif(request()->routeIs('deposits.*')) $ Nạp tiền
                 @elseif(request()->routeIs('profile.*')) 👤 Tài khoản cá nhân
@@ -381,7 +385,7 @@
                 </span>
             </div>
             <div class="topbar-actions">
-                <span style="font-family:'Roboto Mono',monospace; font-size:12px; font-weight:700; color:var(--green); background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); padding:5px 10px; border-radius:7px;">{{ number_format(Auth::user()->balance ?? 0) }} VND</span>
+                <span id="topbarBalance" style="font-family:'Roboto Mono',monospace; font-size:12px; font-weight:700; color:var(--green); background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); padding:5px 10px; border-radius:7px;">{{ number_format(Auth::user()->balance ?? 0) }} VND</span>
                 <a href="{{ route('vps.create') }}" class="topbar-btn btn-primary" style="text-decoration:none; padding:7px 12px; font-size:12px;">+ Mua VPS</a>
             </div>
         </div>
@@ -458,6 +462,7 @@
             <a href="{{ route('deposits.index') }}" class="sheet-item">$ Nạp tiền</a>
             @if(Auth::user()->is_admin)
             <a href="{{ route('admin.revenue') }}" class="sheet-item">📊 Doanh thu</a>
+            <a href="{{ route('admin.users') }}" class="sheet-item">👥 Người dùng</a>
             <a href="{{ route('admin.google-cloud') }}" class="sheet-item">☁️ Google Cloud</a>
             @endif
             <form method="POST" action="{{ route('logout') }}" style="margin:0;">
@@ -516,6 +521,8 @@
 .sheet-item:last-child { border-bottom: none; }
 .sheet-item:active { opacity: 0.6; }
 </style>
+
+<x-support.zalo-button :mobile-offset="true" />
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
 <script src="{{ asset('js/app.js') }}" defer></script>

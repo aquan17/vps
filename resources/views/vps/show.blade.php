@@ -6,7 +6,7 @@
 
 @section('content')
 @php
-    $isRunning   = in_array($vps->status, ['Đang chạy', 'RUNNING']);
+    $isRunning   = in_array($vps->status, ['Sẵn sàng', 'Đang chạy', 'RUNNING']);
     $statusClass = $vps->statusBadgeClass();
     $loginUsers = [
         'windows' => 'admin',
@@ -655,7 +655,7 @@ async function copyPw() {
     const pw = await fetchPassword();
     if (!pw) return;
 
-    navigator.clipboard.writeText(pw).then(function () {
+    copyText(pw).then(function () {
         const btn = document.getElementById('copyBtn');
         btn.textContent = 'Đã copy';
         btn.classList.remove('btn-primary');
@@ -666,6 +666,29 @@ async function copyPw() {
             btn.classList.add('btn-primary');
         }, 2000);
     });
+}
+
+async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+
+    try {
+        document.execCommand('copy');
+    } finally {
+        document.body.removeChild(textarea);
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function () {

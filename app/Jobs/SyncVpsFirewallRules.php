@@ -37,7 +37,7 @@ class SyncVpsFirewallRules implements ShouldQueue
             return;
         }
 
-        $gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_file);
+        $gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
 
         foreach (array_unique(array_filter($this->staleRuleNames)) as $ruleName) {
             $gcp->deleteFirewallRule($ruleName);

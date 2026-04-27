@@ -43,4 +43,14 @@ class User extends Authenticatable
         'is_admin' => 'boolean',
         'balance' => 'integer',
     ];
+
+    public function depositOrders()
+    {
+        return $this->hasMany(DepositOrder::class);
+    }
+
+    public function vpsInstances()
+    {
+        return $this->hasMany(VpsInstance::class);
+    }
 }

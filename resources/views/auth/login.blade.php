@@ -42,8 +42,14 @@
     </div>
 
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <label class="inline-flex items-center gap-2 text-sm text-slate-600">
-            <input id="remember" type="checkbox" name="remember" class="rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+        <label for="remember" class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+            <input
+                id="remember"
+                type="checkbox"
+                name="remember"
+                value="1"
+                style="appearance: auto; -webkit-appearance: checkbox; width: 18px; height: 18px; accent-color: #2563eb; cursor: pointer;"
+            >
             Duy trì đăng nhập
         </label>
 

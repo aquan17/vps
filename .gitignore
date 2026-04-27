@@ -13,3 +13,8 @@ npm-debug.log
 yarn-error.log
 /.idea
 /.vscode
+/storage/logs/*.log
+/storage/*.json
+/storage/**/*.json
+*service-account*.json
+*google*credentials*.json

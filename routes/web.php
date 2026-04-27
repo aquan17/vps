@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DepositController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AdminRevenueController;
+use App\Http\Controllers\AdminUserController;
 
 Route::get('/', function () {
     return view('welcome');
@@ -37,6 +38,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/deposits',       [DepositController::class, 'index'])->name('deposits.index');
     Route::post('/deposits',      [DepositController::class, 'store'])->name('deposits.store');
     Route::get('/deposits/{id}',  [DepositController::class, 'show'])->name('deposits.show');
+    Route::get('/deposits/{id}/status', [DepositController::class, 'status'])->name('deposits.status');
 
     // VPS — Dashboard & Create
     Route::get('/dashboard',   [VpsController::class, 'index'])->name('vps.dashboard');
@@ -56,9 +58,13 @@ Route::middleware('auth')->group(function () {
 
     // Admin — GCP Project Management (auth + admin check is inside the controller)
     Route::get('/admin/revenue', [AdminRevenueController::class, 'index'])->name('admin.revenue');
+    Route::get('/admin/users', [AdminUserController::class, 'index'])->name('admin.users');
+    Route::patch('/admin/users/{user}/balance', [AdminUserController::class, 'updateBalance'])->name('admin.users.balance');
     Route::get('/admin/google-cloud',                    [VpsController::class, 'adminGoogleCloud'])->name('admin.google-cloud');
     Route::post('/admin/google-cloud',                   [VpsController::class, 'adminGcpStore'])->name('admin.gcloud.store');
     Route::post('/admin/google-cloud/sync',              [VpsController::class, 'adminGcpSync'])->name('admin.gcloud.sync');
+    Route::post('/admin/google-cloud/sync-vps',          [VpsController::class, 'adminGcpSyncVps'])->name('admin.gcloud.sync-vps');
+    Route::patch('/admin/google-cloud/vps/{id}/expires-at', [VpsController::class, 'adminVpsExpiresAt'])->name('admin.gcloud.vps.expires-at');
     Route::patch('/admin/google-cloud/{id}/toggle',      [VpsController::class, 'adminGcpToggle'])->name('admin.gcloud.toggle');
 });
 

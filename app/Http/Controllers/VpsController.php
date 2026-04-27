@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class VpsController extends Controller
@@ -41,15 +42,30 @@ class VpsController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        $this->syncPendingInstances($instances);
+        $this->syncPendingInstancesAfterResponse($instances->pluck('id')->all());
 
         return view('vps.index', compact('instances'));
+    }
+
+    private function syncPendingInstancesAfterResponse(array $instanceIds): void
+    {
+        if (empty($instanceIds)) {
+            return;
+        }
+
+        app()->terminating(function () use ($instanceIds) {
+            $instances = VpsInstance::with('gcpProject')
+                ->whereIn('id', $instanceIds)
+                ->get();
+
+            $this->syncPendingInstances($instances);
+        });
     }
 
     private function syncPendingInstances($instances): void
     {
         foreach ($instances as $instance) {
-            if ($instance->public_ip || !$instance->gcpProject) {
+            if (!$instance->gcpProject || !$instance->isProvisioning()) {
                 continue;
             }
 
@@ -59,7 +75,7 @@ class VpsController extends Controller
             }
 
             try {
-                $this->gcp->setProjectSettings($instance->gcpProject->project_id, $instance->gcpProject->credentials_file);
+                $this->gcp->setProjectSettings($instance->gcpProject->project_id, $instance->gcpProject->credentials_path);
                 $this->gcp->syncInstanceStatus($instance);
             } catch (\Exception $e) {
                 Log::warning('Failed to sync pending VPS status', [
@@ -78,13 +94,15 @@ class VpsController extends Controller
 
         // Eager-load instances to prevent N+1
         $gcpProjects  = GcpProject::with('instances')->orderBy('created_at', 'desc')->get();
-        $allInstances = VpsInstance::with('user')->orderBy('created_at', 'desc')->get();
+        $allInstances = VpsInstance::with(['user', 'gcpProject'])->orderBy('created_at', 'desc')->get();
+        $this->syncPendingInstancesAfterResponse($allInstances->pluck('id')->all());
 
         $projects = [];
         $totalCpuUsed  = 0;
         $totalCpuLimit = 0;
         $totalInst     = 0;
         $totalInstLimit = 0;
+        $missingQuotaProjectIds = [];
 
         foreach ($gcpProjects as $pj) {
             $vpses     = $pj->instances->where('status', '!=', 'Lỗi API');
@@ -92,17 +110,11 @@ class VpsController extends Controller
             $ramUsed   = $vpses->sum('ram');
             $cpuDbUsed = $vpses->sum('cpu');
 
-            // Fetch live quota (cached 5 min per project)
-            $quota = Cache::remember('gcp_quota_' . $pj->id, 300, function () use ($pj) {
-                try {
-                    $this->gcp->setProjectSettings($pj->project_id, $pj->credentials_file);
-                    $q = $this->gcp->getRegionQuotas('asia-southeast1');
-                    try { $q = array_merge($q, $this->gcp->getProjectQuotas()); } catch (\Exception $e) {}
-                    return $q;
-                } catch (\Exception $e) {
-                    return null;
-                }
-            });
+            // Read cached quota only. Missing cache is refreshed after the page response.
+            $quota = Cache::get($this->gcpQuotaCacheKey($pj->id));
+            if ($quota === null) {
+                $missingQuotaProjectIds[] = $pj->id;
+            }
 
             $cpuLimit  = $quota['CPUS_ALL_REGIONS']['limit'] ?? $quota['CPUS']['limit'] ?? 12;
             $cpuUsed   = $quota['CPUS_ALL_REGIONS']['usage'] ?? $quota['CPUS']['usage'] ?? $cpuDbUsed;
@@ -113,7 +125,7 @@ class VpsController extends Controller
             $hasInstanceRoom = $instLimit <= 0 || $vpsCount < $instLimit;
             $shouldBeFull    = !$hasCpuRoom || !$hasInstanceRoom;
 
-            if ($pj->is_full !== $shouldBeFull) {
+            if ($quota !== null && $pj->is_full !== $shouldBeFull) {
                 $pj->is_full = $shouldBeFull;
                 $pj->save();
             }
@@ -121,7 +133,7 @@ class VpsController extends Controller
             // Build display name from JSON file
             $displayName = $pj->project_id;
             try {
-                $j = json_decode(file_get_contents($pj->credentials_file), true);
+                $j = json_decode(file_get_contents($pj->credentials_path), true);
                 if (isset($j['client_email'])) {
                     $displayName = explode('@', $j['client_email'])[0];
                 }
@@ -147,6 +159,8 @@ class VpsController extends Controller
             $totalInstLimit += $instLimit;
         }
 
+        $this->refreshGcpQuotasAfterResponse($missingQuotaProjectIds);
+
         $stats = [
             'active'     => $gcpProjects->where('is_active', true)->where('is_full', false)->count(),
             'full'       => $gcpProjects->where('is_full', true)->count(),
@@ -157,6 +171,60 @@ class VpsController extends Controller
         ];
 
         return view('admin.google-cloud', compact('projects', 'allInstances', 'stats'));
+    }
+
+    private function gcpQuotaCacheKey(int $projectId): string
+    {
+        return 'gcp_quota_' . $projectId;
+    }
+
+    private function gcpQuotaRefreshLockKey(int $projectId): string
+    {
+        return 'gcp_quota_refresh_' . $projectId;
+    }
+
+    private function refreshGcpQuotasAfterResponse(array $projectIds): void
+    {
+        $projectIds = array_values(array_unique(array_filter($projectIds)));
+        if (empty($projectIds)) {
+            return;
+        }
+
+        app()->terminating(function () use ($projectIds) {
+            GcpProject::whereIn('id', $projectIds)->get()->each(function (GcpProject $project) {
+                $lockKey = $this->gcpQuotaRefreshLockKey($project->id);
+                if (!Cache::add($lockKey, true, 60)) {
+                    return;
+                }
+
+                try {
+                    $this->refreshGcpQuotaCache($project);
+                } finally {
+                    Cache::forget($lockKey);
+                }
+            });
+        });
+    }
+
+    private function refreshGcpQuotaCache(GcpProject $project): ?array
+    {
+        try {
+            $this->gcp->setProjectSettings($project->project_id, $project->credentials_path);
+            $quota = $this->gcp->getRegionQuotas('asia-southeast1');
+            $quota = array_merge($quota, $this->gcp->getProjectQuotas());
+
+            Cache::put($this->gcpQuotaCacheKey($project->id), $quota, 300);
+
+            return $quota;
+        } catch (\Exception $e) {
+            Log::warning('Failed to refresh GCP quota cache', [
+                'gcp_project_id' => $project->id,
+                'project_id' => $project->project_id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     public function adminGcpStore(Request $request)
@@ -194,7 +262,7 @@ class VpsController extends Controller
 
             GcpProject::create([
                 'project_id'       => $projectId,
-                'credentials_file' => $fullPath,
+                'credentials_file' => $fileName,
                 'is_active'        => true,
                 'is_full'          => false,
             ]);
@@ -210,12 +278,53 @@ class VpsController extends Controller
     public function adminGcpSync()
     {
         abort_unless(Auth::user()->is_admin, 403);
-        $projects = GcpProject::all();
-        foreach ($projects as $pj) {
-            Cache::forget('gcp_quota_' . $pj->id);
+        $projectIds = GcpProject::pluck('id')->all();
+        foreach ($projectIds as $projectId) {
+            Cache::forget($this->gcpQuotaCacheKey($projectId));
         }
         Cache::forget('gcp_total_quotas');
+        $this->refreshGcpQuotasAfterResponse($projectIds);
         return back()->with('success', '🔄 Đã đồng bộ xong! Thống kê Quota đã được tải mới từ Google Cloud.');
+    }
+
+    public function adminGcpSyncVps()
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $synced = 0;
+        $failed = 0;
+
+        $instances = VpsInstance::with('gcpProject')
+            ->whereNotNull('gcp_project_id')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        foreach ($instances as $instance) {
+            if (!$instance->gcpProject) {
+                $failed++;
+                continue;
+            }
+
+            try {
+                $this->gcp->setProjectSettings($instance->gcpProject->project_id, $instance->gcpProject->credentials_path);
+                $this->gcp->syncInstanceStatus($instance);
+                $synced++;
+            } catch (\Exception $e) {
+                $failed++;
+                Log::warning('Admin failed to sync VPS status', [
+                    'vps_id' => $instance->id,
+                    'name' => $instance->name,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $message = "Da dong bo trang thai {$synced} VPS.";
+        if ($failed > 0) {
+            $message .= " {$failed} VPS bi loi, xem log de biet chi tiet.";
+        }
+
+        return back()->with($failed > 0 ? 'error' : 'success', $message);
     }
 
     public function adminGcpToggle(Request $request, $id)
@@ -240,6 +349,21 @@ class VpsController extends Controller
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    public function adminVpsExpiresAt(Request $request, $id)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $data = $request->validate([
+            'expires_at' => 'required|date_format:Y-m-d',
+        ]);
+
+        $vps = VpsInstance::findOrFail($id);
+        $vps->expires_at = Carbon::createFromFormat('Y-m-d', $data['expires_at'], 'Asia/Ho_Chi_Minh')->endOfDay();
+        $vps->save();
+
+        return back()->with('success', 'Da cap nhat ngay het han VPS ' . $vps->name . '.');
+    }
 
     private function findManageableInstance($id)
     {
@@ -272,8 +396,11 @@ class VpsController extends Controller
 
         [$project, $family] = explode(':', $value, 2);
 
+        $allowedImages = array_merge(...array_values($this->osImageOptions()));
+
         return in_array($project, $this->allowedOsImageProjects(), true)
-            && preg_match('/^[a-z0-9][a-z0-9-]{1,80}[a-z0-9]$/', $family);
+            && preg_match('/^[a-z0-9][a-z0-9-]{1,80}[a-z0-9]$/', $family)
+            && array_key_exists($value, $allowedImages);
     }
 
     private function osTypeFromImageSelection(string $value): string
@@ -317,8 +444,6 @@ class VpsController extends Controller
                 'windows-cloud:windows-2025' => 'Windows Server 2025',
             ],
             'ubuntu' => [
-                'ubuntu-os-cloud:ubuntu-1804-lts' => 'Ubuntu 18.04 LTS',
-                'ubuntu-os-cloud:ubuntu-2004-lts' => 'Ubuntu 20.04 LTS',
                 'ubuntu-os-cloud:ubuntu-2204-lts' => 'Ubuntu 22.04 LTS',
                 'ubuntu-os-cloud:ubuntu-2404-lts' => 'Ubuntu 24.04 LTS',
             ],
@@ -335,6 +460,68 @@ class VpsController extends Controller
     }
 
     // ─── VPS CRUD ─────────────────────────────────────────────────────────────
+
+    private function defaultRemotePortForOs(string $osType): int
+    {
+        return $osType === 'windows' ? 3389 : 22;
+    }
+
+    private function createDefaultRemoteFirewallRule(VpsInstance $vps, string $osType, ?int $ownerUserId = null, bool $dispatchSync = true): void
+    {
+        $port = $this->defaultRemotePortForOs($osType);
+        $sourceRange = '0.0.0.0/0';
+        $ownerUserId = $ownerUserId ?: $vps->user_id;
+
+        VpsFirewallRule::firstOrCreate(
+            [
+                'vps_instance_id' => $vps->id,
+                'protocol' => 'tcp',
+                'port_start' => $port,
+                'port_end' => $port,
+                'source_range' => $sourceRange,
+            ],
+            [
+                'user_id' => $ownerUserId,
+                'gcp_project_id' => $vps->gcp_project_id,
+                'rule_name' => VpsFirewallPolicy::entryRuleName($vps, 'tcp', $port, $port, $sourceRange),
+                'target_tag' => GcpVpsService::firewallTargetTag($vps),
+                'sync_status' => 'pending',
+            ]
+        );
+
+        if ($dispatchSync) {
+            SyncVpsFirewallRules::dispatch($vps->id);
+        }
+    }
+
+    private function fallbackZonesFor(string $selectedZone): array
+    {
+        $region = substr($selectedZone, 0, strrpos($selectedZone, '-'));
+
+        $zonesByRegion = [
+            'asia-southeast1' => ['asia-southeast1-a', 'asia-southeast1-c', 'asia-southeast1-b'],
+            'asia-east1' => ['asia-east1-a', 'asia-east1-c', 'asia-east1-b'],
+            'asia-east2' => ['asia-east2-a', 'asia-east2-c', 'asia-east2-b'],
+            'asia-northeast1' => ['asia-northeast1-a', 'asia-northeast1-c', 'asia-northeast1-b'],
+            'us-west1' => ['us-west1-a', 'us-west1-c', 'us-west1-b'],
+            'europe-west3' => ['europe-west3-a', 'europe-west3-c', 'europe-west3-b'],
+        ];
+
+        return array_values(array_unique(array_merge(
+            [$selectedZone],
+            $zonesByRegion[$region] ?? [],
+            ['us-central1-a', 'us-central1-c']
+        )));
+    }
+
+    private function isRetryableCreateError(\Throwable $e): bool
+    {
+        $message = strtoupper($e->getMessage());
+
+        return str_contains($message, 'SERVICE UNAVAILABLE')
+            || str_contains($message, 'ZONE_RESOURCE_POOL_EXHAUSTED')
+            || str_contains($message, 'RESOURCE_POOL_EXHAUSTED');
+    }
 
     public function create()
     {
@@ -433,7 +620,7 @@ class VpsController extends Controller
 
         try {
             $gcpProject = $this->router->getAvailableProject();
-            $this->gcp->setProjectSettings($gcpProject->project_id, $gcpProject->credentials_file);
+            $this->gcp->setProjectSettings($gcpProject->project_id, $gcpProject->credentials_path);
 
             $region     = substr($zone, 0, strrpos($zone, '-'));
             $quotaCheck = $this->gcp->hasQuotaForPlan($region, (int) $plan['cores'], (int) $plan['disk']);
@@ -499,21 +686,58 @@ class VpsController extends Controller
         }
 
         try {
-            $this->gcp->createInstance(
-                $vpsName,
-                $zone,
-                $plan['type'],
-                $randomPassword,
-                $osType,
-                $plan['disk'],
-                $request->os_image,
-                ['cloudvps-managed', GcpVpsService::firewallTargetTag($vps)]
-            );
-            if (!$this->gcp->waitForInstanceVisibility($vpsName, $zone)) {
-                throw new \RuntimeException('GCP instance is not visible after create operation.');
+            $createdZone = null;
+            $lastCreateError = null;
+
+            foreach ($this->fallbackZonesFor($zone) as $tryZone) {
+                $vps->update([
+                    'zone' => $tryZone,
+                    'status' => 'Dang khoi tao...',
+                ]);
+
+                try {
+                    $this->gcp->createInstance(
+                        $vpsName,
+                        $tryZone,
+                        $plan['type'],
+                        $randomPassword,
+                        $osType,
+                        $plan['disk'],
+                        $request->os_image,
+                        ['cloudvps-managed', GcpVpsService::firewallTargetTag($vps)]
+                    );
+
+                    if (!$this->gcp->waitForInstanceVisibility($vpsName, $tryZone)) {
+                        throw new \RuntimeException('GCP instance is not visible after create operation.');
+                    }
+
+                    $createdZone = $tryZone;
+                    break;
+                } catch (\Throwable $createError) {
+                    $lastCreateError = $createError;
+                    $this->gcp->deleteInstance($vpsName, $tryZone);
+
+                    Log::warning('Create VPS zone attempt failed', [
+                        'user_id' => Auth::id(),
+                        'project_id' => $gcpProject->project_id,
+                        'zone' => $tryZone,
+                        'machine_type' => $plan['type'],
+                        'name' => $vpsName,
+                        'message' => $createError->getMessage(),
+                    ]);
+
+                    if (!$this->isRetryableCreateError($createError)) {
+                        throw $createError;
+                    }
+                }
+            }
+
+            if (!$createdZone) {
+                throw $lastCreateError ?: new \RuntimeException('Could not create VPS in any fallback zone.');
             }
 
             $this->gcp->syncInstanceStatus($vps);
+            $this->createDefaultRemoteFirewallRule($vps, $osType);
 
             return redirect()->route('vps.dashboard')->with('success', "Đã tạo máy chủ {$vpsName}. Trạng thái và IP đang được cập nhật.");
 
@@ -572,7 +796,7 @@ class VpsController extends Controller
 
         // Always sync status when customer views the detail page
         if ($vps->gcpProject && $vps->status !== 'Lỗi API') {
-            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_file);
+            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
             $this->gcp->syncInstanceStatus($vps);
         }
 
@@ -616,7 +840,7 @@ class VpsController extends Controller
     {
         $vps = $this->findManageableInstance($id);
         try {
-            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_file);
+            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
             $this->gcp->syncInstanceStatus($vps);
 
             if ($vps->status === 'Đã tắt' || $vps->status === 'TERMINATED') {
@@ -648,7 +872,7 @@ class VpsController extends Controller
         $newPassword = $request->new_password;
 
         try {
-            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_file);
+            $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
             $this->gcp->setInstancePassword($vps->name, $vps->zone, $newPassword, $vps->os ?? 'ubuntu');
 
             $vps->password = $newPassword;

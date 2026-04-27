@@ -258,31 +258,29 @@ class GcpVpsService
     public function setProjectSettings(string $projectId, string $credentialsFile)
     {
         $this->projectId = $projectId;
-        $credentialsFile = $this->normalizePathSeparators(trim($credentialsFile));
+        $credentialsFile = trim($credentialsFile);
 
         if ($this->isAbsolutePath($credentialsFile)) {
-            $this->credentialsPath = $credentialsFile;
+            $this->credentialsPath = $this->normalizePathSeparators($credentialsFile);
             return;
         }
 
-        $relativePath = ltrim($credentialsFile, '/\\');
+        $filename = ltrim($this->normalizePathSeparators($credentialsFile), DIRECTORY_SEPARATOR);
+
         $candidates = [
-            storage_path('app/' . $relativePath),
-            storage_path('app/google/' . $relativePath),
+            storage_path('app/gcp_credentials/' . $filename), // Ưu tiên hàng đầu
+            storage_path('app/' . $filename),
+            storage_path('app/google/' . $filename),
         ];
 
-        if (!str_contains($relativePath, DIRECTORY_SEPARATOR)) {
-            $candidates[] = storage_path('app/gcp_credentials/' . $relativePath);
-            $candidates[] = storage_path('app/google/' . $relativePath);
-        }
-
-        foreach (array_unique($candidates) as $path) {
+        foreach ($candidates as $path) {
             if (is_file($path)) {
                 $this->credentialsPath = $path;
                 return;
             }
         }
 
+        // Fallback về đường dẫn mặc định nếu không tìm thấy file thực tế
         $this->credentialsPath = $candidates[0];
     }
 
@@ -332,6 +330,73 @@ class GcpVpsService
         return 'cloud-user';
     }
 
+    private function windowsStartupScript(string $password): string
+    {
+        return "net user administrator \"{$password}\" /active:yes\r\n" .
+            "wmic Useraccount where Name='administrator' set PasswordExpires=false\r\n" .
+            "net user admin \"{$password}\" /add\r\n" .
+            "net user admin \"{$password}\"\r\n" .
+            "net localgroup administrators admin /add\r\n" .
+            "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f\r\n" .
+            "netsh advfirewall firewall set rule group=\"remote desktop\" new enable=Yes\r\n" .
+            "netsh advfirewall firewall add rule name=\"CloudVPS RDP 3389\" dir=in action=allow protocol=TCP localport=3389\r\n" .
+            "sc config TermService start= auto\r\n" .
+            "net start TermService\r\n";
+    }
+
+    private function linuxStartupScript(string $password, string $osType, ?string $osImage = null): string
+    {
+        $linuxUser = $this->linuxLoginUser($osType, $osImage);
+
+        return "#!/bin/bash\n" .
+            "set -e\n" .
+            'CLOUDVPS_USER=' . escapeshellarg($linuxUser) . "\n" .
+            'CLOUDVPS_PASSWORD=' . escapeshellarg($password) . "\n" .
+            "id \"\$CLOUDVPS_USER\" >/dev/null 2>&1 || useradd -m -s /bin/bash \"\$CLOUDVPS_USER\"\n" .
+            "printf '%s:%s\\n' \"\$CLOUDVPS_USER\" \"\$CLOUDVPS_PASSWORD\" | chpasswd\n" .
+            "printf '%s:%s\\n' root \"\$CLOUDVPS_PASSWORD\" | chpasswd\n" .
+            "usermod -aG sudo \"\$CLOUDVPS_USER\" 2>/dev/null || true\n" .
+            "mkdir -p /etc/ssh/sshd_config.d\n" .
+            "find /etc/ssh/sshd_config.d -type f -name '*.conf' -exec sed -i -E 's/^[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication)[[:space:]].*/# &/g' {} \\; 2>/dev/null || true\n" .
+            "cat > /etc/ssh/sshd_config.d/00-cloudvps-password-auth.conf <<'EOF'\n" .
+            "PasswordAuthentication yes\n" .
+            "KbdInteractiveAuthentication yes\n" .
+            "ChallengeResponseAuthentication yes\n" .
+            "PermitRootLogin yes\n" .
+            "EOF\n" .
+            "sed -i -E 's/^[[:space:]]*#?[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication)[[:space:]].*/# &/g' /etc/ssh/sshd_config\n" .
+            "mkdir -p /run/sshd\n" .
+            "SSHD_BIN=\"\$(command -v sshd || echo /usr/sbin/sshd)\"\n" .
+            "\"\$SSHD_BIN\" -t\n" .
+            "systemctl restart ssh || systemctl restart sshd || service ssh restart\n";
+    }
+
+    private function remotePortForOs(?string $osType): int
+    {
+        return $osType === 'windows' ? 3389 : 22;
+    }
+
+    private function installingRemoteStatus(?string $osType): string
+    {
+        return $osType === 'windows' ? 'Đang cài RDP...' : 'Đang cài SSH...';
+    }
+
+    private function isRemotePortOpen(?string $ip, int $port, float $timeoutSeconds = 1.5): bool
+    {
+        if (!$ip) {
+            return false;
+        }
+
+        $connection = @fsockopen($ip, $port, $errno, $errstr, $timeoutSeconds);
+        if (!$connection) {
+            return false;
+        }
+
+        fclose($connection);
+
+        return true;
+    }
+
     public function createInstance(string $name, string $zone, string $machineType, string $password = null, string $osType = 'ubuntu', int $diskSize = 50, string $osImage = null, array $networkTags = [])
     {
         $instancesClient = new InstancesClient([
@@ -379,24 +444,11 @@ class GcpVpsService
             
             if ($osType === 'windows') {
                 $item->setKey('windows-startup-script-bat');
-                $script = "net user administrator \"{$password}\" /active:yes\r\n" .
-                          "wmic Useraccount where Name='administrator' set PasswordExpires=false\r\n" .
-                          "net user admin \"{$password}\" /add\r\n" .
-                          "net user admin \"{$password}\"\r\n" .
-                          "net localgroup administrators admin /add\r\n";
+                $script = $this->windowsStartupScript($password);
                 $item->setValue($script);
             } else {
                 $item->setKey('startup-script');
-                $linuxUser = $this->linuxLoginUser($osType, $osImage);
-                $script = "#!/bin/bash\n" .
-                          "id {$linuxUser} >/dev/null 2>&1 || useradd -m -s /bin/bash {$linuxUser}\n" .
-                          "echo \"{$linuxUser}:{$password}\" | chpasswd\n" .
-                          "echo \"root:{$password}\" | chpasswd\n" .
-                          "usermod -aG sudo {$linuxUser} 2>/dev/null || true\n" .
-                          "mkdir -p /etc/ssh/sshd_config.d\n" .
-                          "printf 'PasswordAuthentication yes\\nPermitRootLogin yes\\n' > /etc/ssh/sshd_config.d/99-cloudvps.conf\n" .
-                          "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication yes/g' /etc/ssh/sshd_config\n" .
-                          "systemctl restart ssh || systemctl restart sshd\n";
+                $script = $this->linuxStartupScript($password, $osType, $osImage);
                 $item->setValue($script);
             }
             
@@ -421,7 +473,7 @@ class GcpVpsService
         $completed = $operation->pollUntilComplete([
             'initialPollDelayMillis' => 1000,
             'maxPollDelayMillis' => 5000,
-            'totalPollTimeoutMillis' => 45000,
+            'totalPollTimeoutMillis' => 20000,
         ]);
 
         if (!$completed) {
@@ -668,16 +720,10 @@ class GcpVpsService
             }
             
             if ($status === 'RUNNING') {
-                $vps->status = 'Đang chạy';
-                
-                // Trích xuất NAT IP (Public IP)
-                $networkInterfaces = $gcpInstance->getNetworkInterfaces();
-                if (count($networkInterfaces) > 0) {
-                    $accessConfigs = $networkInterfaces[0]->getAccessConfigs();
-                    if (count($accessConfigs) > 0) {
-                        $vps->public_ip = $accessConfigs[0]->getNatIP();
-                    }
-                }
+                $remotePort = $this->remotePortForOs($vps->os);
+                $vps->status = $this->isRemotePortOpen($vps->public_ip, $remotePort)
+                    ? 'Sẵn sàng'
+                    : $this->installingRemoteStatus($vps->os);
             } elseif ($status === 'TERMINATED') {
                 $vps->status = 'Đã tắt';
             } elseif ($status === 'PROVISIONING' || $status === 'STAGING') {
@@ -744,21 +790,9 @@ class GcpVpsService
         
         $script = "";
         if ($osType === 'windows') {
-            $script = "net user administrator \"{$newPassword}\" /active:yes\r\n" .
-                      "wmic Useraccount where Name='administrator' set PasswordExpires=false\r\n" .
-                      "net user admin \"{$newPassword}\"\r\n" .
-                      "net localgroup administrators admin /add\r\n";
+            $script = $this->windowsStartupScript($newPassword);
         } else {
-            $linuxUser = $this->linuxLoginUser($osType);
-            $script = "#!/bin/bash\n" .
-                      "id {$linuxUser} >/dev/null 2>&1 || useradd -m -s /bin/bash {$linuxUser}\n" .
-                      "echo \"{$linuxUser}:{$newPassword}\" | chpasswd\n" .
-                      "echo \"root:{$newPassword}\" | chpasswd\n" .
-                      "usermod -aG sudo {$linuxUser} 2>/dev/null || true\n" .
-                      "mkdir -p /etc/ssh/sshd_config.d\n" .
-                      "printf 'PasswordAuthentication yes\\nPermitRootLogin yes\\n' > /etc/ssh/sshd_config.d/99-cloudvps.conf\n" .
-                      "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication yes/g' /etc/ssh/sshd_config\n" .
-                      "systemctl restart ssh || systemctl restart sshd\n";
+            $script = $this->linuxStartupScript($newPassword, $osType);
         }
 
         $newItem = new \Google\Cloud\Compute\V1\Items();

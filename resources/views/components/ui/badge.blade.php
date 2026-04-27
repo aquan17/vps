@@ -17,11 +17,11 @@
         return false;
     };
 
-    if ($containsAny($normalized, ['running', 'dang chay', 'đang chạy', 'paid', 'hoat dong', 'hoạt động'])) {
+    if ($containsAny($normalized, ['ready', 'san sang', 'sẵn sàng', 'running', 'dang chay', 'đang chạy', 'paid', 'hoat dong', 'hoạt động'])) {
         $statusVariant = 'success';
     } elseif ($containsAny($normalized, ['error', 'loi', 'terminated', 'stopped', 'tat'])) {
         $statusVariant = 'danger';
-    } elseif ($containsAny($normalized, ['pending', 'khoi tao', 'cho'])) {
+    } elseif ($containsAny($normalized, ['pending', 'khoi tao', 'khởi tạo', 'cai rdp', 'cài rdp', 'cai ssh', 'cài ssh', 'cho'])) {
         $statusVariant = 'warning';
     } else {
         $statusVariant = $variant ?: 'neutral';
