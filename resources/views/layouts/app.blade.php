@@ -68,6 +68,9 @@
         .sidebar {
             width: 260px;
             min-width: 260px;
+            height: 100vh;
+            max-height: 100vh;
+            min-height: 0;
             background: var(--nav-bg);
             color: #e2e8f0;
             display: flex;
@@ -83,7 +86,7 @@
             background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent3));
         }
 
-        .logo { padding: 22px 20px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); text-decoration: none; display: block; }
+        .logo { padding: 22px 20px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); text-decoration: none; display: block; flex-shrink: 0; }
         .logo-name {
             font-family: 'Roboto Mono', monospace;
             font-size: 20px; font-weight: 700;
@@ -92,22 +95,48 @@
         }
         .logo-sub { font-size: 11px; color: #64748b; letter-spacing: 2px; text-transform: uppercase; margin-top: 3px; font-family: 'Roboto Mono', monospace; }
 
-        .nav { flex: 1; padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
-        .nav-label { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #475569; padding: 12px 12px 4px; font-weight: 600; }
+        .sidebar-nav {
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            padding: 12px 10px;
+            display: flex;
+            flex-direction: column;
+            flex-wrap: nowrap;
+            align-items: stretch;
+            gap: 2px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(148,163,184,0.45) transparent;
+        }
+        .sidebar-nav::-webkit-scrollbar { width: 4px; }
+        .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.45); border-radius: 999px; }
+        .nav-label { width: 100%; flex: 0 0 auto; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: #475569; padding: 12px 12px 4px; font-weight: 600; }
 
         .nav-item {
             display: flex; align-items: center; gap: 10px;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            flex: 0 0 auto;
             padding: 11px 13px; border-radius: 10px;
             cursor: pointer; color: #94a3b8;
             font-size: 14px; font-weight: 500;
             transition: all 0.18s; text-decoration: none;
             border: 1px solid transparent;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
+        .nav-item span:not(.nav-icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .nav-item:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
         .nav-item.active { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.2); }
         .nav-icon { font-size: 17px; width: 22px; text-align: center; }
 
-        .sidebar-footer { padding: 12px 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+        .sidebar-footer { padding: 12px 10px; border-top: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
         .user-info { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; }
         .avatar {
             width: 32px; height: 32px; border-radius: 50%;
@@ -322,7 +351,7 @@
             <div class="logo-sub">Control Panel</div>
         </a>
 
-        <nav class="nav">
+        <nav class="sidebar-nav">
             <div class="nav-label">Tổng quan</div>
             <a href="{{ route('vps.dashboard') }}" class="nav-item {{ request()->routeIs('vps.dashboard') ? 'active' : '' }}">
                 <span class="nav-icon">🖥️</span> VPS của tôi
@@ -344,6 +373,9 @@
             </a>
             <a href="{{ route('admin.users') }}" class="nav-item {{ request()->routeIs('admin.users*') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
                 <span class="nav-icon">👥</span> Người dùng
+            </a>
+            <a href="{{ route('admin.vouchers.index') }}" class="nav-item {{ request()->routeIs('admin.vouchers.*') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
+                <span class="nav-icon">%</span> Voucher
             </a>
             <a href="{{ route('admin.google-cloud') }}" class="nav-item {{ request()->routeIs('admin.google-cloud') ? 'active' : '' }}" style="border-color:rgba(239,68,68,0.15);">
                 <span class="nav-icon">☁️</span> Google Cloud

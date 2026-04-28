@@ -13,24 +13,28 @@ use App\Services\GcpVpsService;
 use App\Services\GcpProjectRouter;
 use App\Services\VpsPricingService;
 use App\Services\VpsFirewallPolicy;
+use App\Services\VoucherService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class VpsController extends Controller
 {
     protected GcpVpsService $gcp;
     protected GcpProjectRouter $router;
     protected VpsPricingService $pricingService;
+    protected VoucherService $voucherService;
 
-    public function __construct(GcpVpsService $gcp, GcpProjectRouter $router, VpsPricingService $pricingService)
+    public function __construct(GcpVpsService $gcp, GcpProjectRouter $router, VpsPricingService $pricingService, VoucherService $voucherService)
     {
         $this->gcp            = $gcp;
         $this->router         = $router;
         $this->pricingService = $pricingService;
+        $this->voucherService = $voucherService;
     }
 
     // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -403,6 +407,15 @@ class VpsController extends Controller
             && array_key_exists($value, $allowedImages);
     }
 
+    private function allowedDurationsForUser(?\App\Models\User $user): array
+    {
+        if ($user && $user->is_admin) {
+            return [1, 7, 30, 90, 180, 365];
+        }
+
+        return [30, 90, 180, 365];
+    }
+
     private function osTypeFromImageSelection(string $value): string
     {
         [$project, $family] = explode(':', $value, 2);
@@ -584,6 +597,39 @@ class VpsController extends Controller
         return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName'));
     }
 
+    public function previewVoucher(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'plan' => 'required|string',
+            'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
+            'voucher_code' => 'nullable|string|max:50',
+        ]);
+
+        $plans = $this->pricingService->getPlans();
+        $planId = array_key_exists($data['plan'], $plans) ? $data['plan'] : 'plan_mini';
+        $plan = $plans[$planId];
+        $duration = (int) $data['duration'];
+        $subtotal = $this->pricingService->calculatePrice($plan, $duration);
+
+        try {
+            $result = $this->voucherService->preview($data['voucher_code'] ?? null, Auth::user(), $planId, $duration, $subtotal);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'discount_amount' => 0,
+                'original_amount' => $subtotal,
+                'final_amount' => $subtotal,
+            ], 422);
+        }
+
+        return response()->json([
+            'code' => $result['code'],
+            'discount_amount' => $result['discount_amount'],
+            'original_amount' => $result['original_amount'],
+            'final_amount' => $result['final_amount'],
+        ]);
+    }
+
     public function store(Request $request)
     {
         $request->validate([
@@ -600,20 +646,20 @@ class VpsController extends Controller
                 },
             ],
             'zone'     => 'required',
-            'duration' => 'required|integer|in:1,7,30,90,180,365',
+            'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
+            'voucher_code' => 'nullable|string|max:50',
         ]);
 
         $plans = $this->pricingService->getPlans();
 
         $plan       = $plans[$request->plan] ?? $plans['plan_mini'];
+        $planId     = array_key_exists($request->plan, $plans) ? $request->plan : 'plan_mini';
         $zone       = $request->zone;
         $duration   = (int) $request->duration;
-        $totalPrice = $this->pricingService->calculatePrice($plan, $duration);
+        $basePrice  = $this->pricingService->calculatePrice($plan, $duration);
+        $totalPrice = $basePrice;
         $osType     = $this->osTypeFromImageSelection($request->os_image);
-
-        if ((int) (Auth::user()->balance ?? 0) < $totalPrice) {
-            return back()->with('error', 'So du khong du. Vui long nap them tien de mua VPS.');
-        }
+        $voucherCode = $this->voucherService->normalizeCode($request->input('voucher_code'));
 
         $vpsName        = $request->input('name');
         $randomPassword = substr(str_shuffle('abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#*&^'), 0, 14);
@@ -653,16 +699,17 @@ class VpsController extends Controller
         $expiresAt = now('Asia/Ho_Chi_Minh')->addDays($duration);
 
         try {
-            $vps = DB::transaction(function () use ($gcpProject, $vpsName, $randomPassword, $zone, $plan, $expiresAt, $osType, $totalPrice) {
+            $vps = DB::transaction(function () use ($gcpProject, $vpsName, $randomPassword, $zone, $plan, $planId, $expiresAt, $osType, $duration, $basePrice, $voucherCode, &$totalPrice) {
                 $user = \App\Models\User::whereKey(Auth::id())->lockForUpdate()->firstOrFail();
+
+                $voucherPreview = $this->voucherService->preview($voucherCode, $user, $planId, $duration, $basePrice);
+                $totalPrice = (int) $voucherPreview['final_amount'];
 
                 if ((int) $user->balance < $totalPrice) {
                     throw new \RuntimeException('INSUFFICIENT_BALANCE');
                 }
 
-                $user->decrement('balance', $totalPrice);
-
-                return VpsInstance::create([
+                $vps = VpsInstance::create([
                     'user_id'        => $user->id,
                     'gcp_project_id' => $gcpProject->id,
                     'name'           => $vpsName,
@@ -675,7 +722,31 @@ class VpsController extends Controller
                     'cpu'            => $plan['cores'],
                     'ram'            => $plan['ram'],
                     'disk'           => $plan['disk'],
+                    'voucher_code'   => $voucherPreview['code'],
+                    'original_price' => $voucherPreview['original_amount'],
+                    'discount_amount' => $voucherPreview['discount_amount'],
+                    'paid_amount'    => $voucherPreview['final_amount'],
                 ]);
+
+                if ($voucherCode) {
+                    $voucherResult = $this->voucherService->redeem($voucherCode, $user, $planId, $duration, $basePrice, $vps->id);
+                    $totalPrice = (int) $voucherResult['final_amount'];
+
+                    if ((int) $user->balance < $totalPrice) {
+                        throw new \RuntimeException('INSUFFICIENT_BALANCE');
+                    }
+
+                    $vps->update([
+                        'voucher_code' => $voucherResult['code'],
+                        'original_price' => $voucherResult['original_amount'],
+                        'discount_amount' => $voucherResult['discount_amount'],
+                        'paid_amount' => $voucherResult['final_amount'],
+                    ]);
+                }
+
+                $user->decrement('balance', $totalPrice);
+
+                return $vps;
             });
         } catch (\RuntimeException $e) {
             if ($e->getMessage() === 'INSUFFICIENT_BALANCE') {
@@ -683,6 +754,8 @@ class VpsController extends Controller
             }
 
             throw $e;
+        } catch (\InvalidArgumentException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
         }
 
         try {
@@ -745,10 +818,7 @@ class VpsController extends Controller
             $this->gcp->deleteInstance($vpsName, $zone);
 
             // Refund balance and clean up VPS record atomically
-            DB::transaction(function () use ($vps, $totalPrice) {
-                \App\Models\User::whereKey(Auth::id())->increment('balance', $totalPrice);
-                $vps->delete();
-            });
+            $this->refundFailedVpsPurchase($vps, $totalPrice);
 
             if (str_contains($e->getMessage(), 'QUOTA_EXCEEDED')) {
                 $this->router->markProjectAsFull($gcpProject->id);
@@ -773,10 +843,7 @@ class VpsController extends Controller
             $this->gcp->deleteInstance($vpsName, $zone);
 
             // Refund balance and clean up VPS record atomically
-            DB::transaction(function () use ($vps, $totalPrice) {
-                \App\Models\User::whereKey(Auth::id())->increment('balance', $totalPrice);
-                $vps->delete();
-            });
+            $this->refundFailedVpsPurchase($vps, $totalPrice);
 
             Log::error('Create VPS system error', [
                 'user_id' => Auth::id(),
@@ -788,6 +855,23 @@ class VpsController extends Controller
             ]);
             return back()->with('error', 'Tạm hết hàng. Vui lòng quay lại sau.');
         }
+    }
+
+    private function refundFailedVpsPurchase(VpsInstance $vps, int $amount): void
+    {
+        DB::transaction(function () use ($vps, $amount) {
+            \App\Models\User::whereKey($vps->user_id ?: Auth::id())->increment('balance', $amount);
+
+            $redemptions = $vps->voucherRedemptions()->with('voucher')->get();
+            foreach ($redemptions as $redemption) {
+                if ($redemption->voucher && $redemption->voucher->used_count > 0) {
+                    $redemption->voucher->decrement('used_count');
+                }
+            }
+
+            $vps->voucherRedemptions()->delete();
+            $vps->delete();
+        });
     }
 
     public function show($id)

@@ -7,6 +7,7 @@ use App\Http\Controllers\DepositController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AdminRevenueController;
 use App\Http\Controllers\AdminUserController;
+use App\Http\Controllers\AdminVoucherController;
 
 Route::get('/', function () {
     return view('welcome');
@@ -43,6 +44,7 @@ Route::middleware('auth')->group(function () {
     // VPS — Dashboard & Create
     Route::get('/dashboard',   [VpsController::class, 'index'])->name('vps.dashboard');
     Route::get('/vps/create',  [VpsController::class, 'create'])->name('vps.create');
+    Route::post('/vps/voucher/preview', [VpsController::class, 'previewVoucher'])->middleware('throttle:30,1')->name('vps.voucher.preview');
     Route::post('/vps',        [VpsController::class, 'store'])->name('vps.store');
 
     // VPS — Instance management
@@ -60,6 +62,11 @@ Route::middleware('auth')->group(function () {
     Route::get('/admin/revenue', [AdminRevenueController::class, 'index'])->name('admin.revenue');
     Route::get('/admin/users', [AdminUserController::class, 'index'])->name('admin.users');
     Route::patch('/admin/users/{user}/balance', [AdminUserController::class, 'updateBalance'])->name('admin.users.balance');
+    Route::get('/admin/vouchers', [AdminVoucherController::class, 'index'])->name('admin.vouchers.index');
+    Route::post('/admin/vouchers', [AdminVoucherController::class, 'store'])->name('admin.vouchers.store');
+    Route::put('/admin/vouchers/{voucher}', [AdminVoucherController::class, 'update'])->name('admin.vouchers.update');
+    Route::patch('/admin/vouchers/{voucher}/toggle', [AdminVoucherController::class, 'toggle'])->name('admin.vouchers.toggle');
+    Route::delete('/admin/vouchers/{voucher}', [AdminVoucherController::class, 'destroy'])->name('admin.vouchers.destroy');
     Route::get('/admin/google-cloud',                    [VpsController::class, 'adminGoogleCloud'])->name('admin.google-cloud');
     Route::post('/admin/google-cloud',                   [VpsController::class, 'adminGcpStore'])->name('admin.gcloud.store');
     Route::post('/admin/google-cloud/sync',              [VpsController::class, 'adminGcpSync'])->name('admin.gcloud.sync');

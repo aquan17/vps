@@ -7,16 +7,28 @@
 @section('content')
 @php
     $selectedPlan = old('plan', 'plan_mini');
-    $selectedDuration = (int) old('duration', 30);
+    $selectedVoucher = old('voucher_code', '');
     $balance = (int) (Auth::user()->balance ?? 0);
-    $durationOptions = [
-        1 => '1 ngày',
-        7 => '7 ngày',
-        30 => '1 tháng',
-        90 => '3 tháng',
-        180 => '6 tháng',
-        365 => '1 năm (-15%)',
-    ];
+    $isAdmin = (bool) (Auth::user()->is_admin ?? false);
+    $durationOptions = $isAdmin
+        ? [
+            1 => '1 ngày',
+            7 => '7 ngày',
+            30 => '1 tháng',
+            90 => '3 tháng',
+            180 => '6 tháng',
+            365 => '1 năm (-15%)',
+        ]
+        : [
+            30 => '1 tháng',
+            90 => '3 tháng',
+            180 => '6 tháng',
+            365 => '1 năm (-15%)',
+        ];
+    $selectedDuration = (int) old('duration', 30);
+    if (!array_key_exists($selectedDuration, $durationOptions)) {
+        $selectedDuration = array_key_first($durationOptions);
+    }
     $planPayload = collect($plans)->map(function ($plan) {
         return [
             'name' => $plan['name'],
@@ -87,6 +99,7 @@
                     </div>
 
                     <input type="hidden" name="plan" x-bind:value="plan">
+                    <input type="hidden" name="voucher_code" x-bind:value="voucherCode">
                     <div class="vps-plan-grid grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         @foreach($plans as $key => $plan)
                             <x-vps.pricing-card
@@ -143,7 +156,7 @@
                                         type="button"
                                         x-bind:disabled="submitting"
                                         class="flex min-h-10 items-center justify-center rounded-lg border px-3 text-center text-sm font-semibold transition-colors"
-                                        x-on:click="duration = {{ $days }}"
+                                        x-on:click="setDuration({{ $days }})"
                                         x-bind:class="Number(duration) === {{ $days }} ? 'border-brand-600 bg-brand-50 text-brand-700 ring-2 ring-brand-100' : 'border-slate-300 bg-white text-slate-700 hover:border-brand-300'"
                                     >
                                         {{ $label }}
@@ -190,12 +203,38 @@
             </div>
 
             <div class="hidden lg:block">
-                <x-vps.checkout-summary :balance="$balance" :deposit-route="route('deposits.index')" />
+                <x-vps.checkout-summary
+                    :balance="$balance"
+                    :deposit-route="route('deposits.index')"
+                    :voucher-preview-route="route('vps.voucher.preview')"
+                />
             </div>
         </div>
 
         <div class="fixed inset-x-3 bottom-20 z-[180] lg:hidden">
             <div class="rounded-card border border-slate-200 bg-white p-3 shadow-soft">
+                <div class="mb-2 flex gap-2">
+                    <input
+                        type="text"
+                        class="min-h-10 min-w-0 flex-1 rounded-lg border-slate-300 bg-white text-sm font-semibold uppercase shadow-sm ui-focus"
+                        placeholder="Voucher"
+                        x-model="voucherCode"
+                        x-on:input="clearVoucherPreview()"
+                    >
+                    <button
+                        type="button"
+                        class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 shadow-sm"
+                        x-bind:disabled="voucherLoading || submitting || !voucherCode"
+                        x-on:click="previewVoucher()"
+                    >
+                        <span x-text="voucherLoading ? '...' : 'Ap dung'"></span>
+                    </button>
+                </div>
+
+                <div class="mb-2 rounded-lg border px-3 py-2 text-xs font-semibold" x-show="voucherMessage" x-bind:class="voucherValid ? 'border-success-100 bg-success-50 text-success-700' : 'border-danger-100 bg-danger-50 text-danger-700'" x-cloak>
+                    <span x-text="voucherMessage"></span>
+                </div>
+
                 <div class="mb-2 flex items-center justify-between gap-3">
                     <div class="min-w-0">
                         <div class="truncate text-xs font-semibold text-slate-500" x-text="selectedPlanName || 'Chưa chọn gói'"></div>
@@ -205,6 +244,11 @@
                         <div class="text-xs font-semibold text-slate-500">Tổng</div>
                         <div class="font-mono text-base font-bold text-brand-700" x-text="formatMoney(totalPrice)"></div>
                     </div>
+                </div>
+
+                <div class="mb-2 flex justify-between gap-3 text-xs font-semibold text-success-700" x-show="discountAmount > 0" x-cloak>
+                    <span>Giam gia</span>
+                    <strong>-<span x-text="formatMoney(discountAmount)"></span></strong>
                 </div>
 
                 <div class="mb-2 rounded-lg border border-danger-100 bg-danger-50 px-3 py-2 text-xs font-semibold text-danger-700" x-show="missingAmount > 0" x-cloak>
@@ -313,12 +357,29 @@
             plan: @json($selectedPlan),
             zone: @json($selectedZone),
             duration: @json($selectedDuration),
+            voucherCode: @json($selectedVoucher),
+            voucherPreviewUrl: @json(route('vps.voucher.preview')),
+            csrfToken: @json(csrf_token()),
             plans: @json($planPayload),
             balance: @json($balance),
             submitting: false,
             durations: @json($durationOptions),
+            voucherLoading: false,
+            voucherValid: false,
+            voucherMessage: '',
+            discountAmount: 0,
             selectPlan: function (value) {
                 this.plan = value;
+                this.clearVoucherPreview();
+            },
+            setDuration: function (value) {
+                this.duration = value;
+                this.clearVoucherPreview();
+            },
+            clearVoucherPreview: function () {
+                this.voucherValid = false;
+                this.voucherMessage = '';
+                this.discountAmount = 0;
             },
             get selectedPlan() {
                 return this.plans[this.plan] || null;
@@ -333,17 +394,64 @@
             get durationLabel() {
                 return this.durations[this.duration] || (this.duration + ' ngày');
             },
-            get totalPrice() {
+            get subtotalPrice() {
                 if (!this.selectedPlan) return 0;
                 var total = (Number(this.duration) / 30) * Number(this.selectedPlan.price);
                 if (Number(this.duration) === 365) total = total * 0.85;
                 return Math.round(total);
+            },
+            get totalPrice() {
+                return Math.max(0, this.subtotalPrice - Number(this.discountAmount || 0));
             },
             get missingAmount() {
                 return Math.max(0, this.totalPrice - this.balance);
             },
             formatMoney: function (value) {
                 return Number(value || 0).toLocaleString('vi-VN') + ' VND';
+            },
+            previewVoucher: async function () {
+                if (!this.voucherCode || this.voucherLoading) return;
+
+                this.voucherLoading = true;
+                this.voucherMessage = '';
+
+                try {
+                    const response = await fetch(this.voucherPreviewUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': this.csrfToken,
+                        },
+                        body: JSON.stringify({
+                            plan: this.plan,
+                            duration: this.duration,
+                            voucher_code: this.voucherCode,
+                        }),
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        this.voucherValid = false;
+                        this.discountAmount = 0;
+                        this.voucherMessage = data.message || 'Voucher khong hop le.';
+                        return;
+                    }
+
+                    this.voucherValid = true;
+                    this.discountAmount = Number(data.discount_amount || 0);
+                    this.voucherCode = data.code || this.voucherCode;
+                    this.voucherMessage = this.discountAmount > 0
+                        ? 'Da giam ' + this.formatMoney(this.discountAmount)
+                        : 'Voucher hop le.';
+                } catch (error) {
+                    this.voucherValid = false;
+                    this.discountAmount = 0;
+                    this.voucherMessage = 'Khong kiem tra duoc voucher.';
+                } finally {
+                    this.voucherLoading = false;
+                }
             }
         };
     };

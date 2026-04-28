@@ -40,6 +40,10 @@ class VpsInstance extends Model
         'cpu',
         'ram',
         'disk',
+        'voucher_code',
+        'original_price',
+        'discount_amount',
+        'paid_amount',
     ];
 
     protected $casts = [
@@ -60,6 +64,11 @@ class VpsInstance extends Model
     public function firewallRules()
     {
         return $this->hasMany(VpsFirewallRule::class);
+    }
+
+    public function voucherRedemptions()
+    {
+        return $this->hasMany(VoucherRedemption::class);
     }
 
     public function scopeForUser(Builder $query, int $userId): Builder

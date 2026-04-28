@@ -1,6 +1,7 @@
 @props([
     'balance' => 0,
     'depositRoute',
+    'voucherPreviewRoute' => null,
     'sticky' => true,
 ])
 
@@ -41,6 +42,41 @@
     </div>
 
     <div class="mt-4">
+        <div class="mb-4">
+            <label for="voucher_code_preview" class="mb-2 block text-sm font-semibold text-slate-700">Voucher</label>
+            <div class="flex gap-2">
+                <input
+                    type="text"
+                    id="voucher_code_preview"
+                    class="min-h-11 min-w-0 flex-1 rounded-lg border-slate-300 bg-white text-sm font-semibold uppercase shadow-sm ui-focus"
+                    placeholder="Nhap ma"
+                    x-model="voucherCode"
+                    x-on:input="clearVoucherPreview()"
+                >
+                <button
+                    type="button"
+                    class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 shadow-sm transition hover:border-brand-300"
+                    x-bind:disabled="voucherLoading || submitting || !voucherCode"
+                    x-on:click="previewVoucher()"
+                >
+                    <span x-text="voucherLoading ? '...' : 'Ap dung'"></span>
+                </button>
+            </div>
+
+            <div class="mt-2 rounded-lg border px-3 py-2 text-xs font-semibold" x-show="voucherMessage" x-bind:class="voucherValid ? 'border-success-100 bg-success-50 text-success-700' : 'border-danger-100 bg-danger-50 text-danger-700'" x-cloak>
+                <span x-text="voucherMessage"></span>
+            </div>
+        </div>
+
+        <div class="mb-2 flex justify-between gap-4 text-sm" x-show="discountAmount > 0" x-cloak>
+            <span class="text-slate-500">Tam tinh</span>
+            <strong class="text-right font-mono text-slate-700" x-text="formatMoney(subtotalPrice)"></strong>
+        </div>
+        <div class="mb-3 flex justify-between gap-4 text-sm" x-show="discountAmount > 0" x-cloak>
+            <span class="text-slate-500">Giam gia</span>
+            <strong class="text-right font-mono text-success-700">-<span x-text="formatMoney(discountAmount)"></span></strong>
+        </div>
+
         <div class="flex items-end justify-between gap-4">
             <span class="text-sm font-semibold text-slate-500">Tổng chi phí</span>
             <strong class="text-right font-mono text-2xl font-bold text-brand-700" x-text="formatMoney(totalPrice)"></strong>

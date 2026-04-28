@@ -53,4 +53,9 @@ class User extends Authenticatable
     {
         return $this->hasMany(VpsInstance::class);
     }
+
+    public function voucherRedemptions()
+    {
+        return $this->hasMany(VoucherRedemption::class);
+    }
 }
