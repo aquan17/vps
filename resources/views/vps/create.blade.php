@@ -8,8 +8,16 @@
 @php
     $selectedPlan = old('plan', 'plan_mini');
     $selectedVoucher = old('voucher_code', '');
-    $balance = (int) (Auth::user()->balance ?? 0);
     $isAdmin = (bool) (Auth::user()->is_admin ?? false);
+    $assignableUsers = $isAdmin ? collect($adminAssignableUsers ?? []) : collect();
+    $selectedOwnerId = (int) old('user_id', Auth::id());
+    if ($isAdmin && !$assignableUsers->contains('id', $selectedOwnerId)) {
+        $selectedOwnerId = (int) Auth::id();
+    }
+    $ownerBalances = $assignableUsers->mapWithKeys(fn ($user) => [(string) $user->id => (int) ($user->balance ?? 0)]);
+    $balance = $isAdmin
+        ? (int) ($ownerBalances[(string) $selectedOwnerId] ?? (Auth::user()->balance ?? 0))
+        : (int) (Auth::user()->balance ?? 0);
     $durationOptions = $isAdmin
         ? [
             1 => '1 ngày',
@@ -48,7 +56,7 @@
     $selectedZone = old('zone', $defaultZone);
 @endphp
 
-<div x-data="vpsCreatePage()" class="pb-36 lg:pb-8">
+<div x-data="vpsCreatePage()" class="vps-create-page">
     <x-ui.page-header
         title="Khởi tạo máy chủ ảo"
         subtitle="Chọn tên máy chủ, cấu hình, hệ điều hành, khu vực và thanh toán trong một luồng rõ ràng."
@@ -60,6 +68,16 @@
 
     <form action="{{ route('vps.store') }}" method="POST" x-on:submit="if (submitting) { $event.preventDefault(); return; } submitting = true">
         @csrf
+
+        <div class="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
+            <div class="flex items-start gap-3">
+                {{-- <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-xs font-black uppercase text-white">Zalo</span> --}}
+                <div>
+                    <p class="mb-1 text-base font-extrabold text-slate-950">Muốn test VPS trước khi mua?</p>
+                    <p class="mb-0 text-sm font-semibold text-slate-700">Inbox admin qua Zalo ở góc dưới phía bên phải để được hỗ trợ test nhanh.</p>
+                </div>
+            </div>
+        </div>
 
         <div class="vps-create-layout grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
             <div class="space-y-4">
@@ -88,6 +106,42 @@
                         <p class="mb-0 mt-2 text-xs text-slate-500">Dùng 3-32 ký tự gồm chữ thường, số và dấu gạch ngang.</p>
                     </div>
                 </x-ui.card>
+
+                @if($isAdmin)
+                    <x-ui.card padding="md">
+                        <div class="mb-3 flex items-start gap-3">
+                            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-danger-600 font-mono text-sm font-bold text-white">A</span>
+                            <div>
+                                <h2 class="mb-1 text-lg font-bold text-slate-950">Gan VPS cho user</h2>
+                                <p class="mb-0 text-sm text-slate-500">Admin tao ho VPS cho tai khoan duoc chon. Chi phi se tru vao so du cua tai khoan nay.</p>
+                            </div>
+                        </div>
+
+                        <div class="grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px]">
+                            <div>
+                                <label for="user_id" class="mb-2 block text-sm font-semibold text-slate-700">Tai khoan nhan VPS</label>
+                                <select
+                                    id="user_id"
+                                    name="user_id"
+                                    class="block min-h-12 w-full rounded-lg border-slate-300 bg-white text-sm shadow-sm ui-focus"
+                                    x-model="ownerUserId"
+                                    x-on:change="setOwnerUser(ownerUserId)"
+                                    required
+                                >
+                                    @foreach($assignableUsers as $user)
+                                        <option value="{{ $user->id }}" @selected((int) $selectedOwnerId === (int) $user->id)>
+                                            #{{ $user->id }} - {{ $user->name }} ({{ $user->email }})
+                                        </option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                                <div class="text-xs font-bold uppercase text-slate-500">So du user</div>
+                                <div class="mt-1 font-mono text-base font-bold text-success-700" x-text="formatMoney(balance)"></div>
+                            </div>
+                        </div>
+                    </x-ui.card>
+                @endif
 
                 <section>
                     <div class="mb-3 flex items-start gap-3">
@@ -295,6 +349,16 @@
 
 @push('styles')
 <style>
+    .vps-create-page {
+        padding-bottom: 2rem;
+    }
+
+    @media (max-width: 1023px) {
+        .vps-create-page {
+            padding-bottom: 19rem;
+        }
+    }
+
     .vps-create-loading-overlay {
         position: fixed;
         inset: 0;
@@ -358,6 +422,8 @@
             zone: @json($selectedZone),
             duration: @json($selectedDuration),
             voucherCode: @json($selectedVoucher),
+            ownerUserId: @json((string) $selectedOwnerId),
+            ownerBalances: @json($ownerBalances),
             voucherPreviewUrl: @json(route('vps.voucher.preview')),
             csrfToken: @json(csrf_token()),
             plans: @json($planPayload),
@@ -368,6 +434,11 @@
             voucherValid: false,
             voucherMessage: '',
             discountAmount: 0,
+            setOwnerUser: function (value) {
+                this.ownerUserId = String(value || '');
+                this.balance = Number(this.ownerBalances[this.ownerUserId] || 0);
+                this.clearVoucherPreview();
+            },
             selectPlan: function (value) {
                 this.plan = value;
                 this.clearVoucherPreview();
@@ -427,6 +498,7 @@
                             plan: this.plan,
                             duration: this.duration,
                             voucher_code: this.voucherCode,
+                            user_id: this.ownerUserId,
                         }),
                     });
 

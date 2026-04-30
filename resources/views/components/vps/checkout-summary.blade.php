@@ -37,7 +37,7 @@
         </div>
         <div class="flex justify-between gap-4 text-sm">
             <span class="text-slate-500">Số dư</span>
-            <strong class="text-right font-mono text-success-700">{{ number_format($balance, 0, ',', '.') }} VND</strong>
+            <strong class="text-right font-mono text-success-700" x-text="formatMoney(balance)">{{ number_format($balance, 0, ',', '.') }} VND</strong>
         </div>
     </div>
 

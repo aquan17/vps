@@ -21,9 +21,15 @@ use Google\Cloud\Compute\V1\GetInstanceRequest;
 use Google\Cloud\Compute\V1\SetTagsInstanceRequest;
 use Google\Cloud\Compute\V1\Tags;
 use Google\ApiCore\OperationResponse;
+use Illuminate\Support\Facades\Log;
 
 class GcpVpsService
 {
+    private const WINDOWS_LOGIN_USER = 'rdp_access';
+    private const WINDOWS_PASSWORD_KEY_TTL_MINUTES = 5;
+    private const WINDOWS_PASSWORD_POLL_ATTEMPTS = 60;
+    private const WINDOWS_PASSWORD_POLL_SLEEP_SECONDS = 2;
+
     protected ?string $projectId;
     protected ?string $credentialsPath;
 
@@ -332,16 +338,252 @@ class GcpVpsService
 
     private function windowsStartupScript(string $password): string
     {
-        return "net user administrator \"{$password}\" /active:yes\r\n" .
-            "wmic Useraccount where Name='administrator' set PasswordExpires=false\r\n" .
-            "net user admin \"{$password}\" /add\r\n" .
-            "net user admin \"{$password}\"\r\n" .
-            "net localgroup administrators admin /add\r\n" .
+        $loginUser = self::WINDOWS_LOGIN_USER;
+
+        return "net user {$loginUser} \"{$password}\" /add\r\n" .
+            "net user {$loginUser} \"{$password}\" /active:yes\r\n" .
+            "wmic Useraccount where Name='{$loginUser}' set PasswordExpires=false\r\n" .
+            "net localgroup administrators {$loginUser} /add\r\n" .
             "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f\r\n" .
             "netsh advfirewall firewall set rule group=\"remote desktop\" new enable=Yes\r\n" .
             "netsh advfirewall firewall add rule name=\"CloudVPS RDP 3389\" dir=in action=allow protocol=TCP localport=3389\r\n" .
             "sc config TermService start= auto\r\n" .
             "net start TermService\r\n";
+    }
+
+    private function windowsLoginUser(): string
+    {
+        return self::WINDOWS_LOGIN_USER;
+    }
+
+    private function buildWindowsKeyPayload(string $username): array
+    {
+        $key = openssl_pkey_new([
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        ]);
+
+        if (!$key) {
+            throw new \RuntimeException('Unable to generate RSA key for Windows password reset.');
+        }
+
+        if (!openssl_pkey_export($key, $privateKeyPem)) {
+            throw new \RuntimeException('Unable to export Windows RSA private key.');
+        }
+
+        $details = openssl_pkey_get_details($key);
+        if (!$details || !isset($details['rsa']['n'], $details['rsa']['e'])) {
+            throw new \RuntimeException('Unable to read RSA key details for Windows password reset.');
+        }
+
+        $modulus = ltrim($details['rsa']['n'], "\x00");
+        $exponent = $details['rsa']['e'];
+
+        $payload = [
+            'userName' => $username,
+            'modulus' => base64_encode($modulus),
+            'exponent' => base64_encode($exponent),
+            'expireOn' => now('UTC')->addMinutes(self::WINDOWS_PASSWORD_KEY_TTL_MINUTES)->format(DATE_RFC3339),
+        ];
+
+        return [$payload, $privateKeyPem];
+    }
+
+    private function appendWindowsKeyMetadata(InstancesClient $instancesClient, string $name, string $zone, array $payload): void
+    {
+        Log::info('Windows password reset: appending windows-keys metadata', [
+            'project_id' => $this->projectId,
+            'zone' => $zone,
+            'instance' => $name,
+            'username' => $payload['userName'] ?? null,
+            'modulus_prefix' => isset($payload['modulus']) ? substr($payload['modulus'], 0, 12) : null,
+        ]);
+
+        $request = new GetInstanceRequest();
+        $request->setProject($this->projectId);
+        $request->setZone($zone);
+        $request->setInstance($name);
+
+        $instance = $instancesClient->get($request);
+        $metadata = $instance->getMetadata();
+        $items = $metadata->getItems();
+
+        $payloadJson = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if ($payloadJson === false) {
+            throw new \RuntimeException('Unable to encode Windows key payload.');
+        }
+
+        $found = false;
+        foreach ($items as $item) {
+            if ($item->getKey() === 'windows-keys') {
+                $current = trim((string) $item->getValue());
+                $item->setValue($current === '' ? $payloadJson : $current . "\n" . $payloadJson);
+                $found = true;
+                break;
+            }
+        }
+
+        if (!$found) {
+            $newItem = new \Google\Cloud\Compute\V1\Items();
+            $newItem->setKey('windows-keys');
+            $newItem->setValue($payloadJson);
+            $items[] = $newItem;
+        }
+
+        $metadata->setItems($items);
+
+        $setMetadataReq = new \Google\Cloud\Compute\V1\SetMetadataInstanceRequest();
+        $setMetadataReq->setProject($this->projectId);
+        $setMetadataReq->setZone($zone);
+        $setMetadataReq->setInstance($name);
+        $setMetadataReq->setMetadataResource($metadata);
+
+        $operation = $instancesClient->setMetadata($setMetadataReq);
+        $this->waitForZoneOperation($operation);
+
+        Log::info('Windows password reset: windows-keys metadata updated', [
+            'project_id' => $this->projectId,
+            'zone' => $zone,
+            'instance' => $name,
+        ]);
+    }
+
+    private function waitForWindowsEncryptedPassword(InstancesClient $instancesClient, string $name, string $zone, string $modulus): string
+    {
+        $request = new \Google\Cloud\Compute\V1\GetSerialPortOutputInstanceRequest();
+        $request->setProject($this->projectId);
+        $request->setZone($zone);
+        $request->setInstance($name);
+        $request->setPort(4);
+
+        for ($attempt = 0; $attempt < self::WINDOWS_PASSWORD_POLL_ATTEMPTS; $attempt++) {
+            if ($attempt === 0 || ($attempt + 1) % 10 === 0) {
+                Log::info('Windows password reset: waiting for serial port output', [
+                    'project_id' => $this->projectId,
+                    'zone' => $zone,
+                    'instance' => $name,
+                    'attempt' => $attempt + 1,
+                    'max_attempts' => self::WINDOWS_PASSWORD_POLL_ATTEMPTS,
+                ]);
+            }
+
+            $output = $instancesClient->getSerialPortOutput($request);
+            $contents = (string) $output->getContents();
+
+            foreach (preg_split('/\r?\n/', $contents) as $line) {
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+
+                $decoded = json_decode($line, true);
+                if (!is_array($decoded)) {
+                    continue;
+                }
+
+                if (($decoded['modulus'] ?? null) !== $modulus) {
+                    continue;
+                }
+
+                if (!empty($decoded['errorMessage'])) {
+                    Log::warning('Windows password reset: agent returned error', [
+                        'project_id' => $this->projectId,
+                        'zone' => $zone,
+                        'instance' => $name,
+                        'error' => $decoded['errorMessage'],
+                    ]);
+                    throw new \RuntimeException('Windows password reset error: ' . $decoded['errorMessage']);
+                }
+
+                if (!empty($decoded['encryptedPassword'])) {
+                    Log::info('Windows password reset: encrypted password received', [
+                        'project_id' => $this->projectId,
+                        'zone' => $zone,
+                        'instance' => $name,
+                    ]);
+                    return $decoded['encryptedPassword'];
+                }
+            }
+
+            sleep(self::WINDOWS_PASSWORD_POLL_SLEEP_SECONDS);
+        }
+
+        Log::warning('Windows password reset: timed out waiting for serial output', [
+            'project_id' => $this->projectId,
+            'zone' => $zone,
+            'instance' => $name,
+            'max_attempts' => self::WINDOWS_PASSWORD_POLL_ATTEMPTS,
+        ]);
+
+        throw new \RuntimeException('Timed out waiting for Windows password reset.');
+    }
+
+    private function decryptWindowsPassword(string $encryptedPassword, string $privateKeyPem): string
+    {
+        $privateKey = openssl_pkey_get_private($privateKeyPem);
+        if (!$privateKey) {
+            throw new \RuntimeException('Unable to load Windows private key for decryption.');
+        }
+
+        $encrypted = base64_decode($encryptedPassword, true);
+        if ($encrypted === false) {
+            throw new \RuntimeException('Unable to decode encrypted Windows password.');
+        }
+
+        $ok = openssl_private_decrypt($encrypted, $decrypted, $privateKey, OPENSSL_PKCS1_OAEP_PADDING);
+        if (!$ok) {
+            throw new \RuntimeException('Failed to decrypt Windows password.');
+        }
+
+        return (string) $decrypted;
+    }
+
+    public function resetWindowsPassword(string $name, string $zone, ?string $username = null): string
+    {
+        $instancesClient = new InstancesClient([
+            'credentials' => $this->credentialsPath,
+        ]);
+
+        $username = $username ?: $this->windowsLoginUser();
+
+        Log::info('Windows password reset: start', [
+            'project_id' => $this->projectId,
+            'zone' => $zone,
+            'instance' => $name,
+            'username' => $username,
+        ]);
+
+        try {
+            [$payload, $privateKeyPem] = $this->buildWindowsKeyPayload($username);
+            $this->appendWindowsKeyMetadata($instancesClient, $name, $zone, $payload);
+
+            $encryptedPassword = $this->waitForWindowsEncryptedPassword(
+                $instancesClient,
+                $name,
+                $zone,
+                $payload['modulus']
+            );
+
+            $password = $this->decryptWindowsPassword($encryptedPassword, $privateKeyPem);
+
+            Log::info('Windows password reset: success', [
+                'project_id' => $this->projectId,
+                'zone' => $zone,
+                'instance' => $name,
+                'username' => $username,
+            ]);
+
+            return $password;
+        } catch (\Throwable $e) {
+            Log::warning('Windows password reset: failed', [
+                'project_id' => $this->projectId,
+                'zone' => $zone,
+                'instance' => $name,
+                'username' => $username,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
     }
 
     private function linuxStartupScript(string $password, string $osType, ?string $osImage = null): string
@@ -438,19 +680,13 @@ class GcpVpsService
         $networkInterface->setAccessConfigs([$accessConfig]);
         $instance->setNetworkInterfaces([$networkInterface]);
 
-        if ($password) {
+        if ($password && $osType !== 'windows') {
             $metadata = new \Google\Cloud\Compute\V1\Metadata();
             $item = new \Google\Cloud\Compute\V1\Items();
-            
-            if ($osType === 'windows') {
-                $item->setKey('windows-startup-script-bat');
-                $script = $this->windowsStartupScript($password);
-                $item->setValue($script);
-            } else {
-                $item->setKey('startup-script');
-                $script = $this->linuxStartupScript($password, $osType, $osImage);
-                $item->setValue($script);
-            }
+
+            $item->setKey('startup-script');
+            $script = $this->linuxStartupScript($password, $osType, $osImage);
+            $item->setValue($script);
             
             $metadata->setItems([$item]);
             $instance->setMetadata($metadata);
@@ -772,9 +1008,13 @@ class GcpVpsService
         return true;
     }
 
-    public function setInstancePassword(string $name, string $zone, string $newPassword, string $osType)
+    public function setInstancePassword(string $name, string $zone, string $newPassword, string $osType): string
     {
         $instancesClient = new InstancesClient(['credentials' => $this->credentialsPath]);
+
+        if ($osType === 'windows') {
+            return $this->resetWindowsPassword($name, $zone);
+        }
         
         $request = new \Google\Cloud\Compute\V1\GetInstanceRequest();
         $request->setProject($this->projectId);
@@ -789,11 +1029,7 @@ class GcpVpsService
         $keyToSet = $osType === 'windows' ? 'windows-startup-script-bat' : 'startup-script';
         
         $script = "";
-        if ($osType === 'windows') {
-            $script = $this->windowsStartupScript($newPassword);
-        } else {
-            $script = $this->linuxStartupScript($newPassword, $osType);
-        }
+        $script = $this->linuxStartupScript($newPassword, $osType);
 
         $newItem = new \Google\Cloud\Compute\V1\Items();
         $newItem->setKey($keyToSet);
@@ -818,7 +1054,7 @@ class GcpVpsService
         
         // Reboot to apply
         $this->rebootInstance($name, $zone);
-        return true;
+        return $newPassword;
     }
 
     public function upgradeMachineType(string $name, string $zone, string $newMachineTypeRaw)

@@ -9,7 +9,7 @@
     $isRunning   = in_array($vps->status, ['Sẵn sàng', 'Đang chạy', 'RUNNING']);
     $statusClass = $vps->statusBadgeClass();
     $loginUsers = [
-        'windows' => 'admin',
+        'windows' => 'rdp_access',
         'ubuntu' => 'ubuntu',
         'debian' => 'debian',
         'rocky' => 'rocky',
@@ -75,6 +75,14 @@
             </div>
 
             <div class="credential-box">
+                @if($vps->os === 'windows')
+                    <div class="credential-row">
+                        <div>
+                            <span>Hướng dẫn</span>
+                            <strong>Khi VPS báo "Sẵn sàng", bấm "Reset mật khẩu" để lấy mật khẩu đăng nhập.</strong>
+                        </div>
+                    </div>
+                @endif
                 <div class="credential-row">
                     <span>Username</span>
                     <strong>{{ $loginUser }}</strong>
@@ -139,11 +147,18 @@
                 @csrf
                 <div class="action-icon primary">🔑</div>
                 <label for="new_password" class="action-title">Đổi mật khẩu</label>
-                <div class="action-sub">Máy chủ sẽ reboot sau khi đổi.</div>
-                <div class="input-group mt-auto">
-                    <input id="new_password" type="text" name="new_password" class="form-control" placeholder="Mật khẩu mới" required minlength="8">
-                    <button type="submit" class="btn btn-primary fw-semibold">Lưu</button>
-                </div>
+                @if($vps->os === 'windows')
+                    <div class="action-sub">He thong se tao mat khau moi ngau nhien khi ban bam reset.</div>
+                    <div class="mt-auto">
+                        <button type="submit" class="btn btn-primary fw-semibold w-100">Reset mat khau</button>
+                    </div>
+                @else
+                    <div class="action-sub">Máy chủ sẽ reboot sau khi đổi.</div>
+                    <div class="input-group mt-auto">
+                        <input id="new_password" type="text" name="new_password" class="form-control" placeholder="Mật khẩu mới" required minlength="8">
+                        <button type="submit" class="btn btn-primary fw-semibold">Lưu</button>
+                    </div>
+                @endif
             </form>
         </div>
 

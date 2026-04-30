@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use App\Models\VpsInstance;
 use App\Models\VpsFirewallRule;
 use App\Models\GcpProject;
+use App\Models\User;
 use App\Services\GcpVpsService;
 use App\Services\GcpProjectRouter;
 use App\Services\VpsPricingService;
@@ -542,6 +543,12 @@ class VpsController extends Controller
         $gcpProject  = GcpProject::first();
         $defaultName = 'vps-' . strtolower(\Illuminate\Support\Str::random(5));
         $osImages    = $this->osImageOptions();
+        $adminAssignableUsers = Auth::user()->is_admin
+            ? User::query()
+                ->select('id', 'name', 'email', 'balance', 'is_admin')
+                ->orderBy('id')
+                ->get()
+            : collect();
 
         $windowsImages = $osImages['windows'];
         $ubuntuImages  = $osImages['ubuntu'];
@@ -555,7 +562,7 @@ class VpsController extends Controller
             'europe-west3'    => ['name' => 'Frankfurt DE', 'flag' => 'DE', 'ping' => '250ms', 'id' => 'europe-west3-b'],
         ];
 
-        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName'));
+        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName', 'adminAssignableUsers'));
 
         if ($gcpProject) {
             $this->gcp->setProjectSettings($gcpProject->project_id, $gcpProject->credentials_file);
@@ -594,7 +601,7 @@ class VpsController extends Controller
             }
         }
 
-        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName'));
+        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName', 'adminAssignableUsers'));
     }
 
     public function previewVoucher(Request $request): JsonResponse
@@ -603,7 +610,17 @@ class VpsController extends Controller
             'plan' => 'required|string',
             'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
             'voucher_code' => 'nullable|string|max:50',
+            'user_id' => [
+                Rule::requiredIf(Auth::user()->is_admin),
+                'nullable',
+                'integer',
+                Rule::exists('users', 'id'),
+            ],
         ]);
+
+        $voucherUser = Auth::user()->is_admin
+            ? User::findOrFail((int) $data['user_id'])
+            : Auth::user();
 
         $plans = $this->pricingService->getPlans();
         $planId = array_key_exists($data['plan'], $plans) ? $data['plan'] : 'plan_mini';
@@ -612,7 +629,7 @@ class VpsController extends Controller
         $subtotal = $this->pricingService->calculatePrice($plan, $duration);
 
         try {
-            $result = $this->voucherService->preview($data['voucher_code'] ?? null, Auth::user(), $planId, $duration, $subtotal);
+            $result = $this->voucherService->preview($data['voucher_code'] ?? null, $voucherUser, $planId, $duration, $subtotal);
         } catch (\InvalidArgumentException $e) {
             return response()->json([
                 'message' => $e->getMessage(),
@@ -648,7 +665,17 @@ class VpsController extends Controller
             'zone'     => 'required',
             'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
             'voucher_code' => 'nullable|string|max:50',
+            'user_id' => [
+                Rule::requiredIf(Auth::user()->is_admin),
+                'nullable',
+                'integer',
+                Rule::exists('users', 'id'),
+            ],
         ]);
+
+        $ownerUserId = Auth::user()->is_admin
+            ? (int) $request->input('user_id')
+            : Auth::id();
 
         $plans = $this->pricingService->getPlans();
 
@@ -677,7 +704,8 @@ class VpsController extends Controller
                 }
 
                 Log::warning('Create VPS blocked by quota', [
-                    'user_id'   => Auth::id(),
+                    'user_id'   => $ownerUserId,
+                    'actor_user_id' => Auth::id(),
                     'metric'    => $quotaCheck['metric'] ?? null,
                     'limit'     => $quotaCheck['limit'] ?? null,
                     'usage'     => $quotaCheck['usage'] ?? null,
@@ -689,7 +717,8 @@ class VpsController extends Controller
             }
         } catch (\Exception $e) {
             Log::warning('No available VPS stock', [
-                'user_id' => Auth::id(),
+                'user_id' => $ownerUserId,
+                'actor_user_id' => Auth::id(),
                 'message' => $e->getMessage(),
             ]);
 
@@ -699,8 +728,8 @@ class VpsController extends Controller
         $expiresAt = now('Asia/Ho_Chi_Minh')->addDays($duration);
 
         try {
-            $vps = DB::transaction(function () use ($gcpProject, $vpsName, $randomPassword, $zone, $plan, $planId, $expiresAt, $osType, $duration, $basePrice, $voucherCode, &$totalPrice) {
-                $user = \App\Models\User::whereKey(Auth::id())->lockForUpdate()->firstOrFail();
+            $vps = DB::transaction(function () use ($ownerUserId, $gcpProject, $vpsName, $randomPassword, $zone, $plan, $planId, $expiresAt, $osType, $duration, $basePrice, $voucherCode, &$totalPrice) {
+                $user = User::whereKey($ownerUserId)->lockForUpdate()->firstOrFail();
 
                 $voucherPreview = $this->voucherService->preview($voucherCode, $user, $planId, $duration, $basePrice);
                 $totalPrice = (int) $voucherPreview['final_amount'];
@@ -791,7 +820,8 @@ class VpsController extends Controller
                     $this->gcp->deleteInstance($vpsName, $tryZone);
 
                     Log::warning('Create VPS zone attempt failed', [
-                        'user_id' => Auth::id(),
+                        'user_id' => $vps->user_id,
+                        'actor_user_id' => Auth::id(),
                         'project_id' => $gcpProject->project_id,
                         'zone' => $tryZone,
                         'machine_type' => $plan['type'],
@@ -812,7 +842,11 @@ class VpsController extends Controller
             $this->gcp->syncInstanceStatus($vps);
             $this->createDefaultRemoteFirewallRule($vps, $osType);
 
-            return redirect()->route('vps.dashboard')->with('success', "Đã tạo máy chủ {$vpsName}. Trạng thái và IP đang được cập nhật.");
+            $redirectRoute = (int) $vps->user_id === Auth::id()
+                ? route('vps.dashboard')
+                : route('vps.show', $vps->id);
+
+            return redirect($redirectRoute)->with('success', "Đã tạo máy chủ {$vpsName}. Trạng thái và IP đang được cập nhật.");
 
         } catch (\Google\ApiCore\ApiException $e) {
             $this->gcp->deleteInstance($vpsName, $zone);
@@ -823,14 +857,16 @@ class VpsController extends Controller
             if (str_contains($e->getMessage(), 'QUOTA_EXCEEDED')) {
                 $this->router->markProjectAsFull($gcpProject->id);
                 Log::warning('Create VPS quota exceeded from provider', [
-                    'user_id' => Auth::id(),
+                    'user_id' => $vps->user_id,
+                    'actor_user_id' => Auth::id(),
                     'message' => $e->getMessage(),
                 ]);
                 return back()->with('error', 'Tạm hết hàng. Vui lòng quay lại sau.');
             }
 
             Log::error('Create VPS provider API error', [
-                'user_id' => Auth::id(),
+                'user_id' => $vps->user_id,
+                'actor_user_id' => Auth::id(),
                 'project_id' => $gcpProject->project_id,
                 'zone' => $zone,
                 'machine_type' => $plan['type'],
@@ -846,7 +882,8 @@ class VpsController extends Controller
             $this->refundFailedVpsPurchase($vps, $totalPrice);
 
             Log::error('Create VPS system error', [
-                'user_id' => Auth::id(),
+                'user_id' => $vps->user_id,
+                'actor_user_id' => Auth::id(),
                 'project_id' => $gcpProject->project_id,
                 'zone' => $zone,
                 'machine_type' => $plan['type'],
@@ -952,15 +989,29 @@ class VpsController extends Controller
     {
         $vps = $this->findManageableInstance($id);
 
-        $request->validate(['new_password' => 'required|string|min:8|max:32']);
+        $isWindows = ($vps->os ?? '') === 'windows';
+
+        if (!$isWindows) {
+            $request->validate(['new_password' => 'required|string|min:8|max:32']);
+        }
+
         $newPassword = $request->new_password;
 
         try {
             $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
-            $this->gcp->setInstancePassword($vps->name, $vps->zone, $newPassword, $vps->os ?? 'ubuntu');
+
+            if ($isWindows) {
+                $newPassword = $this->gcp->resetWindowsPassword($vps->name, $vps->zone);
+            } else {
+                $newPassword = $this->gcp->setInstancePassword($vps->name, $vps->zone, $newPassword, $vps->os ?? 'ubuntu');
+            }
 
             $vps->password = $newPassword;
             $vps->save();
+
+            if ($isWindows) {
+                return back()->with('success', 'Mật khẩu Windows đã được tạo mới và lưu vào Hệ thống. Quá trình cập nhật có thể mất 1-2 phút để áp dụng.');
+            }
 
             return back()->with('success', 'Mật khẩu đã được đổi thành công và lưu vào Hệ thống. Quá trình reboot sẽ mất vài chục giây để máy chủ áp dụng cấu hình mới.');
         } catch (\Exception $e) {
