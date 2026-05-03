@@ -6,6 +6,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#0f172a">
+    <link rel="icon" type="image/png" href="{{ asset('image/favicon.png') }}">
     <title>@yield('title', 'CloudVPS - Thuê VPS tự động')</title>
     <meta name="description" content="@yield('meta_description', 'CloudVPS cung cấp VPS Google Cloud tự động, quản lý máy chủ, nạp tiền VietQR và triển khai nhanh cho người dùng Việt Nam.')">
     <meta name="robots" content="@yield('robots', 'index, follow')">

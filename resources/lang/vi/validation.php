@@ -121,6 +121,7 @@ return [
     'custom' => [],
 
     'attributes' => [
+        'amount' => 'Số tiền',
         'name' => 'Tên',
         'email' => 'Email',
         'password' => 'Mật khẩu',

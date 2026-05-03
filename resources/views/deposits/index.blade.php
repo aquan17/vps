@@ -7,7 +7,7 @@
 @section('content')
 @php
     $initialAmount = (int) preg_replace('/\D/', '', (string) old('amount', request('amount', 100000)));
-    $initialAmount = min(50000000, max(1000, $initialAmount));
+    $initialAmount = min(50000000, max(10000, $initialAmount));
 @endphp
 
 <x-ui.page-header

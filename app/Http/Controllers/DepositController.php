@@ -30,7 +30,7 @@ class DepositController extends Controller
         ]);
 
         $request->validate([
-            'amount' => 'required|integer|min:1000|max:50000000',
+            'amount' => 'required|integer|min:10000|max:50000000',
         ]);
 
         $order = DepositOrder::create([

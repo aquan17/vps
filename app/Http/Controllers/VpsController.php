@@ -97,10 +97,30 @@ class VpsController extends Controller
     {
         abort_unless(Auth::user()->is_admin, 403);
 
-        // Eager-load instances to prevent N+1
-        $gcpProjects  = GcpProject::with('instances')->orderBy('created_at', 'desc')->get();
-        $allInstances = VpsInstance::with(['user', 'gcpProject'])->orderBy('created_at', 'desc')->get();
-        $this->syncPendingInstancesAfterResponse($allInstances->pluck('id')->all());
+        $gcpProjects = GcpProject::withCount([
+                'instances as active_instances_count' => function ($query) {
+                    $query->where('status', '!=', 'Lỗi API');
+                },
+            ])
+            ->withSum([
+                'instances as active_cpu_used' => function ($query) {
+                    $query->where('status', '!=', 'Lỗi API');
+                },
+            ], 'cpu')
+            ->withSum([
+                'instances as active_ram_used' => function ($query) {
+                    $query->where('status', '!=', 'Lỗi API');
+                },
+            ], 'ram')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $allInstances = VpsInstance::with(['user', 'gcpProject'])
+            ->orderBy('created_at', 'desc')
+            ->paginate(25)
+            ->withQueryString();
+
+        $this->syncPendingInstancesAfterResponse($allInstances->getCollection()->pluck('id')->all());
 
         $projects = [];
         $totalCpuUsed  = 0;
@@ -110,10 +130,9 @@ class VpsController extends Controller
         $missingQuotaProjectIds = [];
 
         foreach ($gcpProjects as $pj) {
-            $vpses     = $pj->instances->where('status', '!=', 'Lỗi API');
-            $vpsCount  = $vpses->count();
-            $ramUsed   = $vpses->sum('ram');
-            $cpuDbUsed = $vpses->sum('cpu');
+            $vpsCount  = (int) $pj->active_instances_count;
+            $ramUsed   = (int) $pj->active_ram_used;
+            $cpuDbUsed = (int) $pj->active_cpu_used;
 
             // Read cached quota only. Missing cache is refreshed after the page response.
             $quota = Cache::get($this->gcpQuotaCacheKey($pj->id));
@@ -414,7 +433,7 @@ class VpsController extends Controller
             return [1, 7, 30, 90, 180, 365];
         }
 
-        return [30, 90, 180, 365];
+        return [1, 7, 30, 90, 180, 365];
     }
 
     private function osTypeFromImageSelection(string $value): string
@@ -692,28 +711,34 @@ class VpsController extends Controller
         $randomPassword = substr(str_shuffle('abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#*&^'), 0, 14);
 
         try {
-            $gcpProject = $this->router->getAvailableProject();
-            $this->gcp->setProjectSettings($gcpProject->project_id, $gcpProject->credentials_path);
+            $gcpProject = null;
+            $region = substr($zone, 0, strrpos($zone, '-'));
 
-            $region     = substr($zone, 0, strrpos($zone, '-'));
-            $quotaCheck = $this->gcp->hasQuotaForPlan($region, (int) $plan['cores'], (int) $plan['disk']);
+            foreach ($this->router->getAvailableProjects() as $candidateProject) {
+                $this->gcp->setProjectSettings($candidateProject->project_id, $candidateProject->credentials_path);
 
-            if (!$quotaCheck['ok']) {
-                if (($quotaCheck['metric'] ?? null) === 'CPUS_ALL_REGIONS') {
-                    $this->router->markProjectAsFull($gcpProject->id);
+                $quotaCheck = $this->gcp->hasQuotaForPlan($region, (int) $plan['cores'], (int) $plan['disk']);
+
+                if ($quotaCheck['ok']) {
+                    $gcpProject = $candidateProject;
+                    break;
                 }
 
-                Log::warning('Create VPS blocked by quota', [
-                    'user_id'   => $ownerUserId,
+                Log::warning('Skip GCP project: not enough quota for selected plan', [
+                    'user_id' => $ownerUserId,
                     'actor_user_id' => Auth::id(),
-                    'metric'    => $quotaCheck['metric'] ?? null,
-                    'limit'     => $quotaCheck['limit'] ?? null,
-                    'usage'     => $quotaCheck['usage'] ?? null,
-                    'needed'    => $quotaCheck['needed'] ?? null,
+                    'gcp_project_id' => $candidateProject->id,
+                    'project_id' => $candidateProject->project_id,
+                    'metric' => $quotaCheck['metric'] ?? null,
+                    'limit' => $quotaCheck['limit'] ?? null,
+                    'usage' => $quotaCheck['usage'] ?? null,
+                    'needed' => $quotaCheck['needed'] ?? null,
                     'available' => $quotaCheck['available'] ?? null,
                 ]);
+            }
 
-                return back()->with('error', 'Tạm hết hàng. Vui lòng quay lại sau.');
+            if (!$gcpProject) {
+                return back()->with('error', 'Tạm hết hàng cho gói đã chọn. Vui lòng chọn gói nhỏ hơn hoặc thử lại sau.');
             }
         } catch (\Exception $e) {
             Log::warning('No available VPS stock', [
@@ -855,7 +880,6 @@ class VpsController extends Controller
             $this->refundFailedVpsPurchase($vps, $totalPrice);
 
             if (str_contains($e->getMessage(), 'QUOTA_EXCEEDED')) {
-                $this->router->markProjectAsFull($gcpProject->id);
                 Log::warning('Create VPS quota exceeded from provider', [
                     'user_id' => $vps->user_id,
                     'actor_user_id' => Auth::id(),

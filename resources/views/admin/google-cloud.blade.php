@@ -250,9 +250,9 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                 <div>
                     <h2 class="mb-0.5 text-base font-bold text-slate-950">VPS trong hệ thống</h2>
-                    <p class="mb-0 text-xs text-slate-500">{{ $allInstances->count() }} máy chủ đang được quản lý.</p>
+                    <p class="mb-0 text-xs text-slate-500">{{ $allInstances->total() }} máy chủ đang được quản lý.</p>
                 </div>
-                <x-ui.badge variant="primary" class="self-start sm:self-auto">{{ $allInstances->count() }} instances</x-ui.badge>
+                <x-ui.badge variant="primary" class="self-start sm:self-auto">{{ $allInstances->total() }} instances</x-ui.badge>
             </div>
         </x-slot>
 
@@ -369,6 +369,12 @@
                 </tbody>
             </table>
         </div>
+
+        @if($allInstances->hasPages())
+            <div class="border-t border-slate-100 px-4 py-3">
+                {{ $allInstances->links() }}
+            </div>
+        @endif
     </x-ui.card>
 </div>
 
