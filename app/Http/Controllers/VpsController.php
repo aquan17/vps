@@ -537,6 +537,7 @@ class VpsController extends Controller
             'asia-east2' => ['asia-east2-a', 'asia-east2-c', 'asia-east2-b'],
             'asia-northeast1' => ['asia-northeast1-a', 'asia-northeast1-c', 'asia-northeast1-b'],
             'us-west1' => ['us-west1-a', 'us-west1-c', 'us-west1-b'],
+            'europe-west2' => ['europe-west2-a', 'europe-west2-c', 'europe-west2-b'],
             'europe-west3' => ['europe-west3-a', 'europe-west3-c', 'europe-west3-b'],
         ];
 
@@ -578,6 +579,7 @@ class VpsController extends Controller
             'asia-east1'      => ['name' => 'Taiwan',       'flag' => 'TW', 'ping' => '42ms',  'id' => 'asia-east1-b'],
             'asia-northeast1' => ['name' => 'Tokyo',        'flag' => 'JP', 'ping' => '65ms',  'id' => 'asia-northeast1-b'],
             'us-west1'        => ['name' => 'Oregon USA',   'flag' => 'US', 'ping' => '180ms', 'id' => 'us-west1-b'],
+            'europe-west2'    => ['name' => 'London UK',    'flag' => 'UK', 'ping' => '235ms', 'id' => 'europe-west2-b'],
             'europe-west3'    => ['name' => 'Frankfurt DE', 'flag' => 'DE', 'ping' => '250ms', 'id' => 'europe-west3-b'],
         ];
 
@@ -695,6 +697,20 @@ class VpsController extends Controller
         $ownerUserId = Auth::user()->is_admin
             ? (int) $request->input('user_id')
             : Auth::id();
+
+        // $requestedDuration = (int) $request->input('duration');
+        // if ($requestedDuration === 1) {
+        //     $createdInLastDay = VpsInstance::query()
+        //         ->where('user_id', $ownerUserId)
+        //         ->where('created_at', '>=', now()->subDay())
+        //         ->exists();
+
+        //     if ($createdInLastDay) {
+        //         return back()
+        //             ->withInput()
+        //             ->with('error', 'Goi 1 ngay: moi tai khoan chi duoc tao toi da 1 VPS trong 24 gio.');
+        //     }
+        // }
 
         $plans = $this->pricingService->getPlans();
 

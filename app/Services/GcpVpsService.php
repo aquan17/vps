@@ -1177,6 +1177,18 @@ class GcpVpsService
         $regionQuotas = $this->getRegionQuotas($regionName);
         $projectQuotas = $this->getProjectQuotas();
 
+        if (empty($regionQuotas) || empty($projectQuotas)) {
+            return [
+                'ok' => false,
+                'metric' => 'NO_QUOTA_DATA',
+                'label' => 'Missing quota data',
+                'limit' => 0,
+                'usage' => 0,
+                'needed' => 0,
+                'available' => 0,
+            ];
+        }
+
         $checks = [
             'CPUS_ALL_REGIONS' => [
                 'label' => 'CPUs (all regions)',

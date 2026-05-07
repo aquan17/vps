@@ -3,6 +3,12 @@
 @section('title', 'Đăng ký CloudVPS - Tạo tài khoản thuê VPS')
 @section('meta_description', 'Tạo tài khoản CloudVPS để thuê VPS Google Cloud, nạp tiền VietQR và quản lý máy chủ tự động trong vài phút.')
 
+@if(config('services.turnstile.enabled') && filled(config('services.turnstile.site_key')))
+    @push('head')
+        <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    @endpush
+@endif
+
 @section('content')
 <div class="mb-6 text-center">
     <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-50 text-2xl font-bold text-brand-700">CV</div>
@@ -67,6 +73,12 @@
             placeholder="Nhập lại mật khẩu"
         >
     </div>
+
+    @if(config('services.turnstile.enabled') && filled(config('services.turnstile.site_key')))
+        <div class="flex justify-center">
+            <div class="cf-turnstile" data-sitekey="{{ config('services.turnstile.site_key') }}"></div>
+        </div>
+    @endif
 
     <x-ui.button type="submit" size="lg" full-width>
         Đăng ký miễn phí

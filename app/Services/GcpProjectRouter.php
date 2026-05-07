@@ -8,15 +8,10 @@ class GcpProjectRouter
 {
     public function getAvailableProjects()
     {
-        return GcpProject::withCount([
-                'instances as active_instances_count' => function ($query) {
-                    $query->where('status', '!=', 'Lỗi API');
-                },
-            ])
+        return GcpProject::query()
             ->where('is_active', true)
             ->where('is_full', false)
-            ->orderBy('active_instances_count')
-            ->orderBy('id')
+            ->orderBy('id', 'asc')
             ->get();
     }
 

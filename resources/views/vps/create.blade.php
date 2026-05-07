@@ -149,7 +149,7 @@
                     <div class="mb-3 flex items-start gap-3">
                         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 font-mono text-sm font-bold text-white">2</span>
                         <div>
-                            <h2 class="mb-1 text-lg font-bold text-slate-950">Chọn gói VPS</h2>
+                            <h2 class="mb-1 text-lg font-bold text-slate-950">Chọn gói VPS - Chip "AMD EPYC 9B45" siêu mạnh </h2>
                             <p class="mb-0 text-sm text-slate-500">Gói Pro được tối ưu cho phần lớn website, tool và workload thường gặp.</p>
                         </div>
                     </div>

@@ -665,10 +665,10 @@
         <div class="plans-row">
             <div class="plan reveal">
                 <div class="plan-tier">Starter</div>
-                <div class="plan-name">G1 Basic</div>
+                <div class="plan-name">Starter G1</div>
                 <div class="plan-tagline">Website cá nhân, học tập, bot nhẹ</div>
                 <div class="plan-price-block">
-                    <span class="plan-price">45k</span>
+                    <span class="plan-price">60k</span>
                     <span class="plan-period">/ tháng</span>
                 </div>
                 <div class="plan-divider"></div>
@@ -683,16 +683,16 @@
             <div class="plan highlight reveal" style="position:relative;">
                 <div class="plan-badge">Phổ biến nhất</div>
                 <div class="plan-tier">Professional</div>
-                <div class="plan-name">G2 Pro</div>
+                <div class="plan-name">Pro G2</div>
                 <div class="plan-tagline">Web bán hàng, dịch vụ nền, API</div>
                 <div class="plan-price-block">
-                    <span class="plan-price">89k</span>
+                    <span class="plan-price">125k</span>
                     <span class="plan-period">/ tháng</span>
                 </div>
                 <div class="plan-divider"></div>
                 <div class="plan-specs">
                     <div class="plan-spec"><span class="spec-k">CPU</span><span class="spec-v">2 vCPU</span></div>
-                    <div class="plan-spec"><span class="spec-k">RAM</span><span class="spec-v">12 GB</span></div>
+                    <div class="plan-spec"><span class="spec-k">RAM</span><span class="spec-v">16 GB</span></div>
                     <div class="plan-spec"><span class="spec-k">Disk</span><span class="spec-v">70 GB SSD</span></div>
                     <div class="plan-spec"><span class="spec-k">Băng thông</span><span class="spec-v">Linh hoạt</span></div>
                 </div>
@@ -700,16 +700,16 @@
             </div>
             <div class="plan reveal">
                 <div class="plan-tier">Enterprise</div>
-                <div class="plan-name">G4 Titan</div>
+                <div class="plan-name">Ultra G3</div>
                 <div class="plan-tagline">Dịch vụ nhiều người dùng, xử lý nặng</div>
                 <div class="plan-price-block">
-                    <span class="plan-price">279k</span>
+                    <span class="plan-price">175k</span>
                     <span class="plan-period">/ tháng</span>
                 </div>
                 <div class="plan-divider"></div>
                 <div class="plan-specs">
                     <div class="plan-spec"><span class="spec-k">CPU</span><span class="spec-v">4 vCPU</span></div>
-                    <div class="plan-spec"><span class="spec-k">RAM</span><span class="spec-v">16 GB</span></div>
+                    <div class="plan-spec"><span class="spec-k">RAM</span><span class="spec-v">8 GB</span></div>
                     <div class="plan-spec"><span class="spec-k">Disk</span><span class="spec-v">80 GB SSD</span></div>
                     <div class="plan-spec"><span class="spec-k">Băng thông</span><span class="spec-v">Linh hoạt</span></div>
                 </div>
