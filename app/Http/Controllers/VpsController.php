@@ -7,10 +7,12 @@ use App\Jobs\SyncVpsFirewallRules;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use App\Models\VpsInstance;
+use App\Models\VpsBackup;
 use App\Models\VpsFirewallRule;
 use App\Models\GcpProject;
 use App\Models\User;
 use App\Services\GcpVpsService;
+use App\Services\GcpBackupService;
 use App\Services\GcpProjectRouter;
 use App\Services\VpsPricingService;
 use App\Services\VpsFirewallPolicy;
@@ -26,13 +28,21 @@ use Illuminate\Validation\Rule;
 class VpsController extends Controller
 {
     protected GcpVpsService $gcp;
+    protected GcpBackupService $backupService;
     protected GcpProjectRouter $router;
     protected VpsPricingService $pricingService;
     protected VoucherService $voucherService;
 
-    public function __construct(GcpVpsService $gcp, GcpProjectRouter $router, VpsPricingService $pricingService, VoucherService $voucherService)
+    public function __construct(
+        GcpVpsService $gcp,
+        GcpBackupService $backupService,
+        GcpProjectRouter $router,
+        VpsPricingService $pricingService,
+        VoucherService $voucherService
+    )
     {
         $this->gcp            = $gcp;
+        $this->backupService  = $backupService;
         $this->router         = $router;
         $this->pricingService = $pricingService;
         $this->voucherService = $voucherService;
@@ -386,7 +396,135 @@ class VpsController extends Controller
         $vps->expires_at = Carbon::createFromFormat('Y-m-d', $data['expires_at'], 'Asia/Ho_Chi_Minh')->endOfDay();
         $vps->save();
 
-        return back()->with('success', 'Da cap nhat ngay het han VPS ' . $vps->name . '.');
+        return back()->with('success', 'Đã cập nhật ngày hết hạn VPS ' . $vps->name . '.');
+    }
+
+    public function adminToggleBackup($id)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $vps = VpsInstance::findOrFail($id);
+        $vps->backup_enabled = !$vps->backup_enabled;
+        if (!$vps->backup_enabled) {
+            $vps->backup_schedule = 'off';
+        } elseif ($vps->backup_schedule === 'off') {
+            $vps->backup_schedule = 'daily';
+        }
+        $vps->save();
+
+        return back()->with(
+            'success',
+            $vps->backup_enabled
+                ? 'Đã bật sao lưu cho VPS ' . $vps->name . '.'
+                : 'Đã tắt sao lưu cho VPS ' . $vps->name . '.'
+        );
+    }
+
+    public function adminUpdateBackupPolicy(Request $request, $id)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $vps = VpsInstance::findOrFail($id);
+        $data = $request->validate([
+            'backup_schedule' => 'required|in:off,daily,weekly',
+            'backup_hour_utc' => 'required|integer|min:0|max:23',
+            'backup_weekday_utc' => 'nullable|integer|min:0|max:6',
+            'backup_retention_days' => 'required|integer|min:1|max:365',
+        ]);
+
+        $vps->backup_schedule = $data['backup_schedule'];
+        $vps->backup_enabled = $data['backup_schedule'] !== 'off';
+        $vps->backup_hour_utc = (int) $data['backup_hour_utc'];
+        $vps->backup_weekday_utc = $data['backup_schedule'] === 'weekly'
+            ? (int) ($data['backup_weekday_utc'] ?? 0)
+            : null;
+        $vps->backup_retention_days = (int) $data['backup_retention_days'];
+        $vps->save();
+
+        return back()->with('success', 'Đã cập nhật chính sách sao lưu cho VPS ' . $vps->name . '.');
+    }
+
+    public function adminCreateBackup($id)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $vps = VpsInstance::with('gcpProject')->findOrFail($id);
+        if (!$vps->gcpProject) {
+            return back()->with('error', 'VPS chưa gán project Google Cloud.');
+        }
+
+        try {
+            $this->backupService->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
+            $backup = $this->backupService->createSnapshotBackup($vps, (int) Auth::id());
+            $vps->backup_last_run_at = now('UTC');
+            $vps->save();
+
+            $retentionDays = max(1, (int) ($vps->backup_retention_days ?: 7));
+            $staleBackups = $vps->backups()
+                ->where('status', 'READY')
+                ->where('created_at', '<', now()->subDays($retentionDays))
+                ->orderBy('created_at', 'asc')
+                ->get();
+
+            foreach ($staleBackups as $stale) {
+                try {
+                    $this->backupService->deleteSnapshotBackup($stale);
+                    $stale->delete();
+                } catch (\Throwable $retentionError) {
+                    Log::warning('Manual backup retention delete failed', [
+                        'vps_id' => $vps->id,
+                        'backup_id' => $stale->id,
+                        'message' => $retentionError->getMessage(),
+                    ]);
+                }
+            }
+
+            if ($backup->status === 'CREATING') {
+                return back()->with('success', 'Đã gửi lệnh sao lưu cho VPS ' . $vps->name . '. Snapshot đang được tạo trên Google Cloud.');
+            }
+
+            return back()->with('success', 'Đã tạo bản sao lưu mới cho VPS ' . $vps->name . '.');
+        } catch (\Throwable $e) {
+            Log::warning('Create VPS backup failed', [
+                'vps_id' => $vps->id,
+                'project_id' => $vps->gcpProject->project_id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return back()->with('error', 'Tạo sao lưu thất bại: ' . $e->getMessage());
+        }
+    }
+
+    public function adminDeleteBackup($id, $backupId)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        $vps = VpsInstance::with('gcpProject')->findOrFail($id);
+        $backup = VpsBackup::where('vps_instance_id', $vps->id)->findOrFail($backupId);
+
+        if (!$vps->gcpProject) {
+            return back()->with('error', 'VPS chưa gán project Google Cloud.');
+        }
+
+        try {
+            if ($backup->status === 'READY') {
+                $this->backupService->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
+                $this->backupService->deleteSnapshotBackup($backup);
+            }
+
+            $snapshotName = $backup->snapshot_name;
+            $backup->delete();
+
+            return back()->with('success', 'Đã xóa bản sao lưu ' . $snapshotName . '.');
+        } catch (\Throwable $e) {
+            Log::warning('Delete VPS backup failed', [
+                'backup_id' => $backup->id,
+                'vps_id' => $vps->id,
+                'message' => $e->getMessage(),
+            ]);
+
+            return back()->with('error', 'Xóa sao lưu thất bại: ' . $e->getMessage());
+        }
     }
 
     private function findManageableInstance($id)
@@ -478,7 +616,7 @@ class VpsController extends Controller
             ],
             'ubuntu' => [
                 'ubuntu-os-cloud:ubuntu-2204-lts' => 'Ubuntu 22.04 LTS',
-                'ubuntu-os-cloud:ubuntu-2404-lts' => 'Ubuntu 24.04 LTS',
+                // 'ubuntu-os-cloud:ubuntu-2404-lts' => 'Ubuntu 24.04 LTS',
             ],
             'linux' => [
                 'debian-cloud:debian-11' => 'Debian 11',
@@ -582,8 +720,6 @@ class VpsController extends Controller
             'europe-west2'    => ['name' => 'London UK',    'flag' => 'UK', 'ping' => '235ms', 'id' => 'europe-west2-b'],
             'europe-west3'    => ['name' => 'Frankfurt DE', 'flag' => 'DE', 'ping' => '250ms', 'id' => 'europe-west3-b'],
         ];
-
-        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName', 'adminAssignableUsers'));
 
         if ($gcpProject) {
             $this->gcp->setProjectSettings($gcpProject->project_id, $gcpProject->credentials_file);
@@ -725,6 +861,10 @@ class VpsController extends Controller
 
         $vpsName        = $request->input('name');
         $randomPassword = substr(str_shuffle('abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#*&^'), 0, 14);
+        if ($osType === 'windows') {
+            // Windows startup script runs in cmd/bat; avoid special chars that can break quoting/escaping.
+            $randomPassword = substr(str_shuffle('abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'), 0, 14);
+        }
 
         try {
             $gcpProject = null;
@@ -961,8 +1101,10 @@ class VpsController extends Controller
             $this->gcp->syncInstanceStatus($vps);
         }
 
-        $renewPlan      = $this->pricingService->findPlanByMachineType($vps->machine_type);
-        $renewBasePrice = $renewPlan['price_per_month'] ?? $renewPlan['price_per_day'] ?? 0;
+        $renewPlan = $this->pricingService->resolvePlanForVps($vps);
+        $renewBasePrice = $renewPlan !== null
+            ? (int) ($renewPlan['price_per_month'] ?? $renewPlan['price_per_day'] ?? 0)
+            : 0;
 
         // Pre-compute renewal option prices so the view doesn't need @php math
         $renewOptions = collect([1, 7, 30, 90, 180, 365])->mapWithKeys(
@@ -971,11 +1113,101 @@ class VpsController extends Controller
             }
         );
 
+        $plans = $this->pricingService->getPlans();
+        $currentPlan = $renewPlan;
+        $currentPrice = $renewPlan !== null ? (int) ($renewPlan['price_per_month'] ?? 0) : 0;
+        $upgradePlans = collect($plans)
+            ->filter(function (array $plan) use ($currentPrice, $vps) {
+                $planPrice = (int) ($plan['price_per_month'] ?? 0);
+                if ($vps->machine_type && ($plan['type'] ?? null) === $vps->machine_type) {
+                    return false;
+                }
+                if ($currentPrice > 0 && $planPrice > 0 && $planPrice <= $currentPrice) {
+                    return false;
+                }
+                return true;
+            })
+            ->mapWithKeys(function (array $plan, string $key) use ($vps, $currentPlan) {
+                $extra = $this->calculateProratedUpgradeCost($vps, $currentPlan, $plan);
+                $name = (string) ($plan['name'] ?? $key);
+                $cores = (int) ($plan['cores'] ?? 0);
+                $ram = (int) ($plan['ram'] ?? 0);
+                $spec = ($cores > 0 && $ram > 0) ? ($cores . 'C/' . $ram . 'G') : (($plan['cores'] ?? '?') . 'C/' . ($plan['ram'] ?? '?') . 'G');
+                $payText = 'Trả: ' . $this->formatVndCompact($extra);
+                $label = $name . ' · ' . $spec . ' · ' . $payText;
+                return [$key => $label];
+            })
+            ->all();
+
         $firewallRules = $vps->firewallRules()
             ->latest()
             ->get();
 
-        return view('vps.show', compact('vps', 'renewBasePrice', 'renewOptions', 'firewallRules'));
+        $backups = $vps->backups()
+            ->latest()
+            ->limit(20)
+            ->get();
+
+        if (Auth::user()->is_admin && $vps->gcpProject) {
+            $this->backupService->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
+            $backups->where('status', 'CREATING')->each(function (VpsBackup $backup) {
+                $this->backupService->refreshSnapshotStatus($backup);
+            });
+            $backups = $vps->backups()->latest()->limit(20)->get();
+        }
+
+        return view('vps.show', compact('vps', 'renewBasePrice', 'renewOptions', 'firewallRules', 'backups'));
+    }
+
+    private function calculateProratedUpgradeCost(VpsInstance $vps, ?array $currentPlan, array $targetPlan): int
+    {
+        $currentMonthly = (int) ($currentPlan['price_per_month'] ?? 0);
+        $targetMonthly = (int) ($targetPlan['price_per_month'] ?? 0);
+        $deltaMonthly = $targetMonthly - $currentMonthly;
+        if ($deltaMonthly <= 0) {
+            return 0;
+        }
+
+        // Charge only for remaining time. If missing expires_at, treat as 30 days.
+        $remainingDays = 30;
+        if ($vps->expires_at) {
+            $now = now('Asia/Ho_Chi_Minh');
+            if ($vps->expires_at->isFuture()) {
+                $remainingDays = max(1, (int) ceil($now->diffInSeconds($vps->expires_at) / 86400));
+            } else {
+                $remainingDays = 0;
+            }
+        }
+
+        if ($remainingDays <= 0) {
+            return 0;
+        }
+
+        $extra = ($deltaMonthly / 30) * $remainingDays;
+        // Round down to a "nice" amount (e.g., 53,333 -> 53,000).
+        $rounded = (int) (floor($extra / 1000) * 1000);
+
+        // Ensure non-zero charge if there's any extra to pay.
+        return max(1000, $rounded);
+    }
+
+    private function formatVndCompact(int $amount): string
+    {
+        if ($amount <= 0) {
+            return '0đ';
+        }
+
+        if ($amount >= 1000000) {
+            $tr = $amount / 1000000;
+            $text = number_format($tr, $tr >= 10 ? 0 : 1, '.', '');
+            return $text . 'tr';
+        }
+
+        if ($amount >= 1000) {
+            return (string) ((int) floor($amount / 1000)) . 'k';
+        }
+
+        return (string) $amount . 'đ';
     }
 
     /**
@@ -1022,7 +1254,7 @@ class VpsController extends Controller
 
     public function upgrade(Request $request, $id)
     {
-        return back()->with('error', 'Tính năng nâng cấp hệ thống đang được bảo trì. Vui lòng quay lại sau.');
+        return back()->with('error', 'Tính năng nâng cấu hình đang tạm tắt. Vui lòng liên hệ admin để xử lý theo quota từng project.');
     }
 
     public function updatePassword(Request $request, $id)
@@ -1041,6 +1273,9 @@ class VpsController extends Controller
             $this->gcp->setProjectSettings($vps->gcpProject->project_id, $vps->gcpProject->credentials_path);
 
             if ($isWindows) {
+                if ($vps->status !== 'Sẵn sàng') {
+                    return back()->with('error', 'Vui lòng đợi VPS báo "Sẵn sàng" rồi mới reset mật khẩu Windows.');
+                }
                 $newPassword = $this->gcp->resetWindowsPassword($vps->name, $vps->zone);
             } else {
                 $newPassword = $this->gcp->setInstancePassword($vps->name, $vps->zone, $newPassword, $vps->os ?? 'ubuntu');
@@ -1066,7 +1301,7 @@ class VpsController extends Controller
         $request->validate(['days' => 'required|integer|in:1,7,30,90,180,365']);
 
         $days = (int) $request->days;
-        $plan = $this->pricingService->findPlanByMachineType($vps->machine_type);
+        $plan = $this->pricingService->resolvePlanForVps($vps);
 
         if (!$plan) {
             return back()->with('error', 'Khong xac dinh duoc gia gia han cho goi VPS nay.');
@@ -1129,8 +1364,11 @@ class VpsController extends Controller
                 throw new \InvalidArgumentException('IP/CIDR nguon dang la IP cua VPS. Hay nhap IP public cua may ban dang Remote Desktop, khong phai IP VPS.');
             }
 
-            VpsFirewallPolicy::assertFirewallPortAllowed($data['protocol'], $portStart, $portEnd, $sourceRange);
-            VpsFirewallPolicy::assertVpsPortLimit($vps, $portStart, $portEnd);
+            // Admin can open any port/range/source by request.
+            if (!Auth::user()->is_admin) {
+                VpsFirewallPolicy::assertFirewallPortAllowed($data['protocol'], $portStart, $portEnd, $sourceRange);
+                VpsFirewallPolicy::assertVpsPortLimit($vps, $portStart, $portEnd);
+            }
         } catch (\InvalidArgumentException $e) {
             return back()->withInput()->with('error', $e->getMessage());
         }

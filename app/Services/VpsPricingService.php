@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\VpsInstance;
+
 class VpsPricingService
 {
     public function getPlans(): array
@@ -41,5 +43,62 @@ class VpsPricingService
         }
 
         return null;
+    }
+
+    /**
+     * Billing plan for renew/upgrade: exact machine_type, then cpu/ram on record, then GCP custom type string.
+     */
+    public function resolvePlanForVps(VpsInstance $vps): ?array
+    {
+        $byType = $this->findPlanByMachineType($vps->machine_type);
+        if ($byType !== null) {
+            return $byType;
+        }
+
+        $cpu = (int) ($vps->cpu ?? 0);
+        $ramGb = (int) ($vps->ram ?? 0);
+        if ($cpu > 0 && $ramGb > 0) {
+            foreach ($this->getPlans() as $plan) {
+                if ((int) ($plan['cores'] ?? 0) === $cpu && (int) ($plan['ram'] ?? 0) === $ramGb) {
+                    return $plan;
+                }
+            }
+        }
+
+        $parsed = $this->parseGcpCustomMachineType($vps->machine_type);
+        if ($parsed !== null) {
+            [$vcpu, $ramFromType] = $parsed;
+            foreach ($this->getPlans() as $plan) {
+                if ((int) ($plan['cores'] ?? 0) === $vcpu && (int) ($plan['ram'] ?? 0) === $ramFromType) {
+                    return $plan;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{0: int, 1: int}|null [vcpu, ram_gb]
+     */
+    private function parseGcpCustomMachineType(?string $machineType): ?array
+    {
+        if ($machineType === null || $machineType === '') {
+            return null;
+        }
+
+        if (!preg_match('/-custom-(\d+)-(\d+)$/', $machineType, $m)) {
+            return null;
+        }
+
+        $vcpu = (int) $m[1];
+        $memMb = (int) $m[2];
+        if ($vcpu <= 0 || $memMb <= 0) {
+            return null;
+        }
+
+        $ramGb = (int) round($memMb / 1024);
+
+        return [$vcpu, $ramGb];
     }
 }

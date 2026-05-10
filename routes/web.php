@@ -74,6 +74,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/admin/google-cloud/sync-vps',          [VpsController::class, 'adminGcpSyncVps'])->name('admin.gcloud.sync-vps');
     Route::patch('/admin/google-cloud/vps/{id}/expires-at', [VpsController::class, 'adminVpsExpiresAt'])->name('admin.gcloud.vps.expires-at');
     Route::patch('/admin/google-cloud/{id}/toggle',      [VpsController::class, 'adminGcpToggle'])->name('admin.gcloud.toggle');
+    Route::patch('/admin/vps/{id}/backup-toggle',        [VpsController::class, 'adminToggleBackup'])->name('admin.vps.backup.toggle');
+    Route::patch('/admin/vps/{id}/backup-policy',        [VpsController::class, 'adminUpdateBackupPolicy'])->name('admin.vps.backup.policy');
+    Route::post('/admin/vps/{id}/backups',               [VpsController::class, 'adminCreateBackup'])->name('admin.vps.backups.create');
+    Route::delete('/admin/vps/{id}/backups/{backupId}',  [VpsController::class, 'adminDeleteBackup'])->name('admin.vps.backups.delete');
 });
 
 // ─── Webhook (public, rate-limited) ──────────────────────────────────────────

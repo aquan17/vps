@@ -34,6 +34,12 @@ class VpsInstance extends Model
         'machine_type',
         'gcp_id',
         'status',
+        'backup_enabled',
+        'backup_schedule',
+        'backup_hour_utc',
+        'backup_weekday_utc',
+        'backup_retention_days',
+        'backup_last_run_at',
         'expires_at',
         'public_ip',
         'os',
@@ -49,6 +55,11 @@ class VpsInstance extends Model
     protected $casts = [
         'expires_at' => 'datetime',
         'password' => 'encrypted',
+        'backup_enabled' => 'boolean',
+        'backup_hour_utc' => 'integer',
+        'backup_weekday_utc' => 'integer',
+        'backup_retention_days' => 'integer',
+        'backup_last_run_at' => 'datetime',
     ];
 
     public function user()
@@ -69,6 +80,11 @@ class VpsInstance extends Model
     public function voucherRedemptions()
     {
         return $this->hasMany(VoucherRedemption::class);
+    }
+
+    public function backups()
+    {
+        return $this->hasMany(VpsBackup::class);
     }
 
     public function scopeForUser(Builder $query, int $userId): Builder

@@ -126,14 +126,14 @@
     <div class="show-panel-head">
         <div>
             <h2>Hành động</h2>
-            <p>Khởi động lại, đổi mật khẩu hoặc gia hạn VPS.</p>
+            <p>Khởi động lại, đổi mật khẩu, nâng cấu hình hoặc gia hạn VPS.</p>
         </div>
         <span class="panel-icon warn">⚡</span>
     </div>
 
     <div class="row g-3">
-        <div class="col-lg-4">
-            <form action="{{ route('vps.reboot', $vps->id) }}" method="POST" onsubmit="return confirm('Khởi động lại sẽ làm gián đoạn tiến trình đang chạy. Tiếp tục?');" class="action-card h-100">
+        <div class="col-12 col-md-6 col-xl-3">
+            <form action="{{ route('vps.reboot', $vps->id) }}" method="POST" class="action-card h-100" data-confirm="Khởi động lại sẽ làm gián đoạn tiến trình đang chạy. Tiếp tục?" data-blocking="VPS đang reboot, vui lòng chờ...">
                 @csrf
                 <div class="action-icon success">↻</div>
                 <div class="action-title">Khởi động lại</div>
@@ -142,15 +142,20 @@
             </form>
         </div>
 
-        <div class="col-lg-4">
-            <form action="{{ route('vps.password', $vps->id) }}" method="POST" onsubmit="return confirm('Mật khẩu sẽ thay đổi và máy chủ sẽ khởi động lại. Tiếp tục?');" class="action-card h-100">
+        <div class="col-12 col-md-6 col-xl-3">
+            <form action="{{ route('vps.password', $vps->id) }}" method="POST" class="action-card h-100" data-confirm="Mật khẩu sẽ thay đổi và máy chủ sẽ khởi động lại. Tiếp tục?" data-blocking="Đang đổi mật khẩu VPS, vui lòng chờ...">
                 @csrf
                 <div class="action-icon primary">🔑</div>
                 <label for="new_password" class="action-title">Đổi mật khẩu</label>
                 @if($vps->os === 'windows')
                     <div class="action-sub">He thong se tao mat khau moi ngau nhien khi ban bam reset.</div>
                     <div class="mt-auto">
-                        <button type="submit" class="btn btn-primary fw-semibold w-100">Reset mat khau</button>
+                        @if($vps->status === 'Sẵn sàng')
+                            <button type="submit" class="btn btn-primary fw-semibold w-100">Reset mat khau</button>
+                        @else
+                            <div class="form-text">Chỉ bấm reset sau khi VPS báo <strong>Sẵn sàng</strong>.</div>
+                            <button type="button" class="btn btn-outline-secondary fw-semibold w-100" disabled>Chưa sẵn sàng</button>
+                        @endif
                     </div>
                 @else
                     <div class="action-sub">Máy chủ sẽ reboot sau khi đổi.</div>
@@ -162,8 +167,8 @@
             </form>
         </div>
 
-        <div class="col-lg-4">
-            <form action="{{ route('vps.renew', $vps->id) }}" method="POST" onsubmit="return confirmRenew();" class="action-card h-100">
+        <div class="col-12 col-md-6 col-xl-3">
+            <form action="{{ route('vps.renew', $vps->id) }}" method="POST" class="action-card h-100" data-custom-confirm="renew" data-blocking="Đang gia hạn VPS, vui lòng chờ...">
                 @csrf
                 <div class="action-icon purple">📅</div>
                 <label for="renewDays" class="action-title">Gia hạn gói cước</label>
@@ -187,16 +192,106 @@
 
 
 @if(Auth::user()->is_admin)
+<div class="show-panel mt-4" id="backup-panel">
+    <div class="show-panel-head">
+        <div>
+            <h2>Sao lưu (Admin)</h2>
+            <p>Tạo snapshot dữ liệu theo từng VPS. Chỉ admin mới có quyền thao tác.</p>
+        </div>
+        <span class="panel-icon">💾</span>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <form action="{{ route('admin.vps.backup.toggle', $vps->id) }}" method="POST" class="m-0" data-confirm="{{ $vps->backup_enabled ? 'Tắt sao lưu cho VPS này?' : 'Bật sao lưu cho VPS này?' }}" data-blocking="Đang cập nhật trạng thái sao lưu...">
+            @csrf
+            @method('PATCH')
+            <button type="submit" class="btn {{ $vps->backup_enabled ? 'btn-success' : 'btn-outline-secondary' }} fw-semibold">
+                {{ $vps->backup_enabled ? 'Sao lưu: BẬT' : 'Sao lưu: TẮT' }}
+            </button>
+        </form>
+        <form action="{{ route('admin.vps.backups.create', $vps->id) }}" method="POST" class="m-0" data-confirm="Tạo sao lưu ngay cho VPS này?" data-blocking="Đang tạo snapshot sao lưu, vui lòng chờ...">
+            @csrf
+            <button type="submit" class="btn btn-primary fw-semibold">Tạo sao lưu ngay</button>
+        </form>
+    </div>
+
+    <form action="{{ route('admin.vps.backup.policy', $vps->id) }}" method="POST" class="firewall-form mb-3" data-confirm="Lưu chính sách sao lưu cho VPS này?" data-blocking="Đang lưu chính sách sao lưu...">
+        @csrf
+        @method('PATCH')
+        <div class="firewall-form-grid">
+            <div>
+                <label for="backupSchedule" class="form-label fw-bold">Lịch</label>
+                <select name="backup_schedule" id="backupSchedule" class="form-select" onchange="toggleWeeklyField()">
+                    <option value="off" {{ ($vps->backup_schedule ?? 'off') === 'off' ? 'selected' : '' }}>Tắt</option>
+                    <option value="daily" {{ ($vps->backup_schedule ?? '') === 'daily' ? 'selected' : '' }}>Hằng ngày</option>
+                    <option value="weekly" {{ ($vps->backup_schedule ?? '') === 'weekly' ? 'selected' : '' }}>Hằng tuần</option>
+                </select>
+            </div>
+            <div>
+                <label for="backupHour" class="form-label fw-bold">Giờ chạy (UTC)</label>
+                <input id="backupHour" type="number" name="backup_hour_utc" class="form-control" min="0" max="23" value="{{ old('backup_hour_utc', $vps->backup_hour_utc ?? 0) }}" required>
+            </div>
+            <div id="backupWeekdayWrap">
+                <label for="backupWeekday" class="form-label fw-bold">Thứ (UTC)</label>
+                <select name="backup_weekday_utc" id="backupWeekday" class="form-select">
+                    <option value="0" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 0 ? 'selected' : '' }}>CN</option>
+                    <option value="1" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 1 ? 'selected' : '' }}>T2</option>
+                    <option value="2" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 2 ? 'selected' : '' }}>T3</option>
+                    <option value="3" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 3 ? 'selected' : '' }}>T4</option>
+                    <option value="4" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 4 ? 'selected' : '' }}>T5</option>
+                    <option value="5" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 5 ? 'selected' : '' }}>T6</option>
+                    <option value="6" {{ (int) old('backup_weekday_utc', $vps->backup_weekday_utc ?? 0) === 6 ? 'selected' : '' }}>T7</option>
+                </select>
+            </div>
+            <div>
+                <label for="backupRetention" class="form-label fw-bold">Giữ lại (ngày)</label>
+                <input id="backupRetention" type="number" name="backup_retention_days" class="form-control" min="1" max="365" value="{{ old('backup_retention_days', $vps->backup_retention_days ?? 7) }}" required>
+            </div>
+            <div class="firewall-submit">
+                <button type="submit" class="btn btn-outline-primary fw-bold w-100">Lưu chính sách</button>
+            </div>
+        </div>
+        <div class="form-text mt-2">Tự động sao lưu chạy bằng scheduler mỗi 10 phút. Giờ sao lưu sử dụng UTC.</div>
+    </form>
+
+    <div class="firewall-rules">
+        @forelse($backups as $backup)
+            <div class="firewall-rule-row">
+                <div>
+                    <div class="firewall-rule-main">{{ $backup->snapshot_name }}</div>
+                    <div class="firewall-rule-sub">
+                        Ổ đĩa: {{ $backup->source_disk }} - Trạng thái: {{ $backup->status }} - Tạo lúc: {{ $backup->created_at->format('d/m/Y H:i:s') }}
+                        @if($backup->error_message)
+                            <span class="d-block text-danger mt-1">{{ $backup->error_message }}</span>
+                        @endif
+                    </div>
+                </div>
+                <form action="{{ route('admin.vps.backups.delete', [$vps->id, $backup->id]) }}" method="POST" class="m-0" data-confirm="Xóa bản sao lưu {{ $backup->snapshot_name }}?" data-blocking="Đang xóa snapshot sao lưu...">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" class="btn btn-outline-danger btn-sm fw-semibold">Xóa</button>
+                </form>
+            </div>
+        @empty
+            <div class="firewall-empty">Chưa có bản sao lưu nào cho VPS này.</div>
+        @endforelse
+    </div>
+</div>
+
 <div class="show-panel mt-4" id="firewall-panel">
     <div class="show-panel-head">
         <div>
             <h2>Firewall / Mo port</h2>
-            <p>Public chi cho phep 80, 443, 8080, 8443. Port quan tri/dev phai gioi han IP nguon.</p>
+            @if(Auth::user()->is_admin)
+                <p>Che do admin: duoc mo port/range tuy y, ke ca full port 1-65535.</p>
+            @else
+                <p>Public chi cho phep 80, 443, 8080, 8443. Port quan tri/dev phai gioi han IP nguon.</p>
+            @endif
         </div>
         <span class="panel-icon firewall">FW</span>
     </div>
 
-    <form action="{{ route('vps.firewall.open', $vps->id) }}" method="POST" class="firewall-form mb-4">
+    <form action="{{ route('vps.firewall.open', $vps->id) }}" method="POST" class="firewall-form mb-4" data-confirm="Mở port cho VPS này?" data-blocking="Đang gửi yêu cầu mở port...">
         @csrf
         <div class="firewall-form-grid">
             <div>
@@ -218,6 +313,11 @@
                     inputmode="numeric"
                     required
                 >
+                @if(Auth::user()->is_admin)
+                    <div class="mt-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary fw-semibold" onclick="setFirewallFullPort()">Full port 1-65535</button>
+                    </div>
+                @endif
             </div>
             <div>
                 <label for="firewallSourceType" class="form-label fw-bold">Nguon truy cap</label>
@@ -242,7 +342,11 @@
                 <button type="submit" class="btn btn-primary fw-bold w-100">Mo port</button>
             </div>
         </div>
-        <div class="form-text mt-2">Tat ca IP chi dung cho 80, 443, 8080, 8443. SSH/RDP/dev/database phai chon IP hien tai hoac CIDR rieng.</div>
+        @if(Auth::user()->is_admin)
+            <div class="form-text mt-2">Admin mode: khong chan port/range/public source. Hay mo dung nhu cau de dam bao an toan.</div>
+        @else
+            <div class="form-text mt-2">Tat ca IP chi dung cho 80, 443, 8080, 8443. SSH/RDP/dev/database phai chon IP hien tai hoac CIDR rieng.</div>
+        @endif
     </form>
 
     <div class="firewall-rules">
@@ -257,7 +361,7 @@
                         @endif
                     </div>
                 </div>
-                <form action="{{ route('vps.firewall.delete', [$vps->id, $rule->id]) }}" method="POST" class="m-0" onsubmit="return confirm('Dong port {{ strtoupper($rule->protocol) }} {{ $rule->portLabel() }}?');">
+                <form action="{{ route('vps.firewall.delete', [$vps->id, $rule->id]) }}" method="POST" class="m-0" data-confirm="Đóng port {{ strtoupper($rule->protocol) }} {{ $rule->portLabel() }}?" data-blocking="Đang gửi yêu cầu đóng port...">
                     @csrf
                     @method('DELETE')
                     <button type="submit" class="btn btn-outline-danger btn-sm fw-semibold">Dong</button>
@@ -276,7 +380,7 @@
         <h2>Vùng nguy hiểm</h2>
         <p>Hành động này sẽ xóa sạch dữ liệu, giải phóng IP và không thể khôi phục.</p>
     </div>
-    <form action="{{ route('vps.destroy', $vps->id) }}" method="POST" onsubmit="return confirm('CẢNH BÁO: Xóa vĩnh viễn không thể khôi phục. Bạn chắc chắn chứ?');">
+    <form action="{{ route('vps.destroy', $vps->id) }}" method="POST" data-confirm="CẢNH BÁO: Xóa vĩnh viễn không thể khôi phục. Bạn chắc chắn chứ?" data-blocking="Đang xóa VPS, vui lòng chờ...">
         @csrf
         @method('DELETE')
         <button type="submit" class="btn btn-danger btn-lg fw-bold">🗑 Xóa máy chủ vĩnh viễn</button>
@@ -286,6 +390,37 @@
 
 @push('styles')
 <style>
+    .action-blocker {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(2, 6, 23, 0.55);
+        z-index: 9999;
+    }
+    .action-blocker.show { display: flex; }
+    .action-blocker-card {
+        background: #fff;
+        border-radius: 14px;
+        padding: 18px 20px;
+        min-width: 300px;
+        max-width: 90vw;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, .2);
+        text-align: center;
+    }
+    .action-blocker-spinner {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 3px solid #cbd5e1;
+        border-top-color: #2563eb;
+        margin: 0 auto 12px;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
     .show-back-btn {
         border-radius: 10px;
     }
@@ -586,12 +721,28 @@
         .danger-panel .btn {
             width: 100%;
         }
+        .action-card {
+            min-height: unset;
+            padding: 16px;
+        }
+        .action-sub {
+            margin-bottom: 12px;
+        }
     }
 </style>
 @endpush
 
 @push('scripts')
 <script>
+let submittingLocked = false;
+
+function showActionBlocker(message) {
+    const blocker = document.getElementById('actionBlocker');
+    const text = document.getElementById('actionBlockerText');
+    if (!blocker || !text) return;
+    text.textContent = message || 'Đang xử lý thao tác, vui lòng chờ...';
+    blocker.classList.add('show');
+}
 
 function toggleFirewallSource() {
     const select = document.getElementById('firewallSourceType');
@@ -603,6 +754,19 @@ function toggleFirewallSource() {
     wrap.style.display = isCustom ? '' : 'none';
     input.required = isCustom;
     if (!isCustom) input.value = '';
+}
+
+function toggleWeeklyField() {
+    const schedule = document.getElementById('backupSchedule');
+    const weekdayWrap = document.getElementById('backupWeekdayWrap');
+    if (!schedule || !weekdayWrap) return;
+    weekdayWrap.style.display = schedule.value === 'weekly' ? '' : 'none';
+}
+
+function setFirewallFullPort() {
+    const input = document.getElementById('firewallPort');
+    if (!input) return;
+    input.value = '1-65535';
 }
 
 // Pre-computed option prices from controller (no client-side math needed)
@@ -709,6 +873,36 @@ async function copyText(text) {
 document.addEventListener('DOMContentLoaded', function () {
     updateRenewPrice();
     toggleFirewallSource();
+    toggleWeeklyField();
+
+    document.querySelectorAll('form[data-confirm], form[data-custom-confirm]').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            if (submittingLocked) {
+                event.preventDefault();
+                return;
+            }
+
+            if (form.dataset.customConfirm === 'renew') {
+                if (!confirmRenew()) {
+                    event.preventDefault();
+                    return;
+                }
+            } else if (form.dataset.confirm && !confirm(form.dataset.confirm)) {
+                event.preventDefault();
+                return;
+            }
+
+            submittingLocked = true;
+            showActionBlocker(form.dataset.blocking || 'Đang xử lý thao tác, vui lòng chờ...');
+        });
+    });
 });
 </script>
 @endpush
+
+<div id="actionBlocker" class="action-blocker" aria-hidden="true">
+    <div class="action-blocker-card">
+        <div class="action-blocker-spinner"></div>
+        <div id="actionBlockerText" class="fw-semibold">Đang xử lý thao tác, vui lòng chờ...</div>
+    </div>
+</div>

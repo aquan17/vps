@@ -18,6 +18,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('vps:cleanup')
             ->everyTenMinutes()
             ->withoutOverlapping(30);
+
+        $schedule->command('vps:backup-run')
+            ->everyTenMinutes()
+            ->withoutOverlapping(30);
     }
 
     /**

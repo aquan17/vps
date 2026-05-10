@@ -25,6 +25,7 @@ use Illuminate\Support\Facades\Log;
 
 class GcpVpsService
 {
+    private const REMOTE_INSTALL_GRACE_MINUTES = 8;
     private const WINDOWS_LOGIN_USER = 'rdp_access';
     private const WINDOWS_PASSWORD_KEY_TTL_MINUTES = 5;
     private const WINDOWS_PASSWORD_POLL_ATTEMPTS = 60;
@@ -623,6 +624,15 @@ class GcpVpsService
         return $osType === 'windows' ? 'Đang cài RDP...' : 'Đang cài SSH...';
     }
 
+    private function hasProvisioningGraceExpired(VpsInstance $vps): bool
+    {
+        if (!$vps->created_at) {
+            return false;
+        }
+
+        return $vps->created_at->lte(now()->subMinutes(self::REMOTE_INSTALL_GRACE_MINUTES));
+    }
+
     private function isRemotePortOpen(?string $ip, int $port, float $timeoutSeconds = 1.5): bool
     {
         if (!$ip) {
@@ -957,9 +967,13 @@ class GcpVpsService
             
             if ($status === 'RUNNING') {
                 $remotePort = $this->remotePortForOs($vps->os);
-                $vps->status = $this->isRemotePortOpen($vps->public_ip, $remotePort)
-                    ? 'Sẵn sàng'
-                    : $this->installingRemoteStatus($vps->os);
+                $remoteReady = $this->isRemotePortOpen($vps->public_ip, $remotePort);
+
+                if ($remoteReady || $this->hasProvisioningGraceExpired($vps)) {
+                    $vps->status = 'Sẵn sàng';
+                } else {
+                    $vps->status = $this->installingRemoteStatus($vps->os);
+                }
             } elseif ($status === 'TERMINATED') {
                 $vps->status = 'Đã tắt';
             } elseif ($status === 'PROVISIONING' || $status === 'STAGING') {
@@ -1066,7 +1080,8 @@ class GcpVpsService
         $stopReq->setProject($this->projectId);
         $stopReq->setZone($zone);
         $stopReq->setInstance($name);
-        $instancesClient->stop($stopReq);
+        $stopOp = $instancesClient->stop($stopReq);
+        $this->waitForZoneOperation($stopOp);
 
         // Vòng lặp chờ Google xả dữ liệu HDD an toàn (Tối đa 60 giây)
         for ($i = 0; $i < 12; $i++) {
@@ -1092,7 +1107,8 @@ class GcpVpsService
         $instancesSetMachineTypeRequestResource->setMachineType($machineTypeUrl);
         $machineTypeReq->setInstancesSetMachineTypeRequestResource($instancesSetMachineTypeRequestResource);
         
-        $instancesClient->setMachineType($machineTypeReq);
+        $setTypeOp = $instancesClient->setMachineType($machineTypeReq);
+        $this->waitForZoneOperation($setTypeOp);
 
         // Đợi 5 giây cho Google lập chỉ mục phần cứng mới
         sleep(5);
@@ -1110,7 +1126,8 @@ class GcpVpsService
         $request->setProject($this->projectId);
         $request->setZone($zone);
         $request->setInstance($name);
-        $instancesClient->start($request);
+        $op = $instancesClient->start($request);
+        $this->waitForZoneOperation($op);
         return true;
     }
 
@@ -1172,12 +1189,32 @@ class GcpVpsService
         }
     }
 
+    /**
+     * @param array{limit: float|int|string|null, usage: float|int|string|null} $quota
+     */
+    private function quotaHeadroom(array $quota): ?float
+    {
+        $limit = isset($quota['limit']) ? (float) $quota['limit'] : null;
+        $usage = isset($quota['usage']) ? (float) $quota['usage'] : null;
+        if ($limit === null || $usage === null) {
+            return null;
+        }
+        // GCP uses negative limits for "unlimited" on some quota metrics.
+        if ($limit < 0) {
+            return null;
+        }
+
+        return $limit - $usage;
+    }
+
     public function hasQuotaForPlan(string $regionName, int $cpu, int $diskGb = 0): array
     {
         $regionQuotas = $this->getRegionQuotas($regionName);
         $projectQuotas = $this->getProjectQuotas();
 
-        if (empty($regionQuotas) || empty($projectQuotas)) {
+        // Regional quotas are required. Project-level CPUS_ALL_REGIONS is optional: if the
+        // Projects API omits it or fails, we still validate CPUs/DISKS in the chosen region.
+        if (empty($regionQuotas)) {
             return [
                 'ok' => false,
                 'metric' => 'NO_QUOTA_DATA',
@@ -1185,6 +1222,18 @@ class GcpVpsService
                 'limit' => 0,
                 'usage' => 0,
                 'needed' => 0,
+                'available' => 0,
+            ];
+        }
+
+        if ($cpu > 0 && !isset($regionQuotas['CPUS'])) {
+            return [
+                'ok' => false,
+                'metric' => 'CPUS',
+                'label' => 'CPUs (region)',
+                'limit' => 0,
+                'usage' => 0,
+                'needed' => $cpu,
                 'available' => 0,
             ];
         }
@@ -1222,8 +1271,12 @@ class GcpVpsService
                 continue;
             }
 
-            $available = $check['quota']['limit'] - $check['quota']['usage'];
-            if ($available < $check['needed']) {
+            $headroom = $this->quotaHeadroom($check['quota']);
+            if ($headroom === null) {
+                continue;
+            }
+
+            if ($headroom < $check['needed']) {
                 return [
                     'ok' => false,
                     'metric' => $metric,
@@ -1231,7 +1284,82 @@ class GcpVpsService
                     'limit' => $check['quota']['limit'],
                     'usage' => $check['quota']['usage'],
                     'needed' => $check['needed'],
-                    'available' => max(0, $available),
+                    'available' => max(0, $headroom),
+                ];
+            }
+        }
+
+        return ['ok' => true];
+    }
+
+    /**
+     * Check if project/region has headroom for additional vCPUs.
+     * Note: quota usage already includes current running CPUs, so upgrades
+     * should only require the delta.
+     */
+    public function hasQuotaForAdditionalCpu(string $regionName, int $additionalCpu): array
+    {
+        if ($additionalCpu <= 0) {
+            return ['ok' => true];
+        }
+
+        $regionQuotas = $this->getRegionQuotas($regionName);
+        $projectQuotas = $this->getProjectQuotas();
+
+        if (empty($regionQuotas)) {
+            return [
+                'ok' => false,
+                'metric' => 'NO_QUOTA_DATA',
+                'label' => 'Missing quota data',
+                'limit' => 0,
+                'usage' => 0,
+                'needed' => $additionalCpu,
+                'available' => 0,
+            ];
+        }
+
+        if (!isset($regionQuotas['CPUS'])) {
+            return [
+                'ok' => false,
+                'metric' => 'CPUS',
+                'label' => 'CPUs (region)',
+                'limit' => 0,
+                'usage' => 0,
+                'needed' => $additionalCpu,
+                'available' => 0,
+            ];
+        }
+
+        $checks = [
+            'CPUS_ALL_REGIONS' => [
+                'label' => 'CPUs (all regions)',
+                'quota' => $projectQuotas['CPUS_ALL_REGIONS'] ?? null,
+            ],
+            'CPUS' => [
+                'label' => 'CPUs',
+                'quota' => $regionQuotas['CPUS'] ?? null,
+            ],
+        ];
+
+        foreach ($checks as $metric => $check) {
+            if (!$check['quota']) {
+                continue;
+            }
+
+            $headroom = $this->quotaHeadroom($check['quota']);
+            if ($headroom === null) {
+                continue;
+            }
+
+            if ($headroom < $additionalCpu) {
+                return [
+                    'ok' => false,
+                    'metric' => $metric,
+                    'label' => $check['label'],
+                    'limit' => $check['quota']['limit'],
+                    'usage' => $check['quota']['usage'],
+                    'needed' => $additionalCpu,
+                    'available' => max(0, $headroom),
                 ];
             }
         }
