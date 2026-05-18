@@ -45,6 +45,9 @@ Route::middleware('auth')->group(function () {
     // VPS — Dashboard & Create
     Route::get('/dashboard',   [VpsController::class, 'index'])->name('vps.dashboard');
     Route::get('/vps/create',  [VpsController::class, 'create'])->name('vps.create');
+    Route::get('/vps/assignable-users/search', [VpsController::class, 'searchAssignableUsers'])
+        ->middleware('throttle:90,1')
+        ->name('vps.assignable-users.search');
     Route::post('/vps/voucher/preview', [VpsController::class, 'previewVoucher'])->middleware('throttle:30,1')->name('vps.voucher.preview');
     Route::post('/vps',        [VpsController::class, 'store'])->name('vps.store');
 
@@ -63,6 +66,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/admin/revenue', [AdminRevenueController::class, 'index'])->name('admin.revenue');
     Route::get('/admin/users', [AdminUserController::class, 'index'])->name('admin.users');
     Route::patch('/admin/users/{user}/balance', [AdminUserController::class, 'updateBalance'])->name('admin.users.balance');
+    Route::delete('/admin/users/{user}', [AdminUserController::class, 'destroy'])->middleware('throttle:30,1')->name('admin.users.destroy');
     Route::get('/admin/vouchers', [AdminVoucherController::class, 'index'])->name('admin.vouchers.index');
     Route::post('/admin/vouchers', [AdminVoucherController::class, 'store'])->name('admin.vouchers.store');
     Route::put('/admin/vouchers/{voucher}', [AdminVoucherController::class, 'update'])->name('admin.vouchers.update');

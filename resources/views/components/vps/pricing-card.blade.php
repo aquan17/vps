@@ -7,7 +7,7 @@
 
 @php
     $cores = $plan['api_cores'] ?? $plan['cores'] ?? '-';
-    $ram = $plan['api_ram'] ?? $plan['ram'] ?? '-';
+    $ram = $plan['ram'] ?? $plan['api_ram'] ?? '-';
     $disk = $plan['disk'] ?? '-';
     $price = (int) ($plan['price_per_month'] ?? $plan['price_per_day'] ?? 0);
 @endphp

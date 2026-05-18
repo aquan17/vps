@@ -73,4 +73,27 @@ class AdminUserController extends Controller
 
         return back()->with('success', 'Đã cập nhật số dư cho ' . $user->name . '.');
     }
+
+    public function destroy(User $user)
+    {
+        abort_unless(Auth::user()->is_admin, 403);
+
+        if ($user->is(Auth::user())) {
+            return back()->with('error', 'Không thể xóa chính tài khoản bạn đang đăng nhập.');
+        }
+
+        if ($user->vpsInstances()->exists()) {
+            return back()->with('error', 'Không thể xóa user còn VPS trong hệ thống. Hãy xóa hoặc chuyển VPS trước.');
+        }
+
+        $email = $user->email;
+
+        DB::transaction(function () use ($user) {
+            $user->delete();
+        });
+
+        return redirect()
+            ->route('admin.users')
+            ->with('success', 'Đã xóa vĩnh viễn tài khoản ' . $email . '.');
+    }
 }

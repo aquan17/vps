@@ -89,19 +89,34 @@
                         <strong>{{ $money($user->balance ?? 0) }}</strong>
                     </div>
 
-                    <form method="POST" action="{{ route('admin.users.balance', $user) }}" class="admin-balance-form">
-                        @csrf
-                        @method('PATCH')
-                        <input
-                            type="text"
-                            name="amount"
-                            class="form-control admin-money-input"
-                            inputmode="numeric"
-                            value="{{ number_format((int) ($user->balance ?? 0), 0, ',', '.') }}"
-                            required
-                        >
-                        <button type="submit" class="btn btn-primary fw-bold">Lưu</button>
-                    </form>
+                    <div class="admin-user-actions">
+                        <form method="POST" action="{{ route('admin.users.balance', $user) }}" class="admin-balance-form">
+                            @csrf
+                            @method('PATCH')
+                            <input
+                                type="text"
+                                name="amount"
+                                class="form-control admin-money-input"
+                                inputmode="numeric"
+                                value="{{ number_format((int) ($user->balance ?? 0), 0, ',', '.') }}"
+                                required
+                            >
+                            <button type="submit" class="btn btn-primary fw-bold">Lưu</button>
+                        </form>
+
+                        @unless($user->is(Auth::user()))
+                            <form
+                                method="POST"
+                                action="{{ route('admin.users.destroy', $user) }}"
+                                class="admin-user-delete-form"
+                                data-confirm="{{ e('Xóa vĩnh viễn tài khoản '.$user->email.' (#'.$user->id.')? Không thể hoàn tác.') }}"
+                            >
+                                @csrf
+                                @method('DELETE')
+                                <button type="submit" class="btn btn-outline-danger fw-bold w-100">Xóa user</button>
+                            </form>
+                        @endunless
+                    </div>
                 </article>
             @empty
                 <div class="admin-users-empty">Không tìm thấy người dùng nào.</div>
@@ -176,7 +191,7 @@
 
     .admin-user-row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 170px 420px;
+        grid-template-columns: minmax(0, 1fr) 170px minmax(280px, 1fr);
         gap: 16px;
         align-items: center;
         border-bottom: 1px solid #e2e8f0;
@@ -273,10 +288,21 @@
         font-weight: 900;
     }
 
+    .admin-user-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
+    }
+
     .admin-balance-form {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 86px;
         gap: 8px;
+    }
+
+    .admin-user-delete-form {
+        margin: 0;
     }
 
     .admin-money-input {
@@ -302,7 +328,7 @@
         }
 
         .admin-balance-form {
-            grid-template-columns: 140px minmax(0, 1fr) 120px;
+            grid-template-columns: minmax(0, 1fr) 100px;
         }
     }
 
@@ -335,6 +361,15 @@
         input.addEventListener('input', function() {
             const digits = this.value.replace(/\D/g, '');
             this.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+        });
+    });
+
+    document.querySelectorAll('form.admin-user-delete-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var msg = form.getAttribute('data-confirm');
+            if (!msg || !window.confirm(msg)) {
+                e.preventDefault();
+            }
         });
     });
 </script>

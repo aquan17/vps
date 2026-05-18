@@ -574,6 +574,12 @@ class VpsController extends Controller
         return [1, 7, 30, 90, 180, 365];
     }
 
+    /** Chỉ users.is_admin === 1 được chọn user_id khi tạo VPS thu hộ. */
+    private function canAssignVpsToOtherUsers(?User $user): bool
+    {
+        return $user !== null && (int) ($user->is_admin ?? 0) === 1;
+    }
+
     private function osTypeFromImageSelection(string $value): string
     {
         [$project, $family] = explode(':', $value, 2);
@@ -697,16 +703,21 @@ class VpsController extends Controller
 
     public function create()
     {
-        $plans       = $this->pricingService->getPlans();
+        $allPlans    = $this->pricingService->getPlans();
         $gcpProject  = GcpProject::first();
         $defaultName = 'vps-' . strtolower(\Illuminate\Support\Str::random(5));
         $osImages    = $this->osImageOptions();
-        $adminAssignableUsers = Auth::user()->is_admin
-            ? User::query()
-                ->select('id', 'name', 'email', 'balance', 'is_admin')
-                ->orderBy('id')
-                ->get()
-            : collect();
+        $canAssignVps = $this->canAssignVpsToOtherUsers(Auth::user());
+        $ownerUserPreselect = null;
+        if ($canAssignVps) {
+            $wantId = (int) old('user_id', Auth::id());
+            $ownerUserPreselect = User::query()
+                ->select('id', 'name', 'email', 'balance')
+                ->find($wantId)
+                ?? User::query()
+                    ->select('id', 'name', 'email', 'balance')
+                    ->findOrFail(Auth::id());
+        }
 
         $windowsImages = $osImages['windows'];
         $ubuntuImages  = $osImages['ubuntu'];
@@ -745,42 +756,87 @@ class VpsController extends Controller
                 }
             }
 
-            $machineSpecs = Cache::remember('gcp_machine_specs', 43200, function () use ($plans) {
-                $types = array_column($plans, 'type');
+            $machineSpecs = Cache::remember('gcp_machine_specs', 43200, function () use ($allPlans) {
+                $types = array_column($allPlans, 'type');
                 return $this->gcp->getMachineTypeSpecs('asia-southeast1-b', $types);
             });
 
-            foreach ($plans as $key => &$plan) {
+            foreach ($allPlans as $key => &$plan) {
                 if (isset($machineSpecs[$plan['type']])) {
                     $plan['api_cores'] = $machineSpecs[$plan['type']]['guestCpus'];
                     $plan['api_ram']   = round($machineSpecs[$plan['type']]['memoryMb'] / 1024);
                 }
             }
+            unset($plan);
         }
 
-        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName', 'adminAssignableUsers'));
+        $plans = $this->pricingService->plansVisibleToUser(Auth::user(), $allPlans);
+
+        return view('vps.create', compact('plans', 'windowsImages', 'ubuntuImages', 'linuxImages', 'uiZones', 'defaultName', 'canAssignVps', 'ownerUserPreselect'));
+    }
+
+    /**
+     * Select2 AJAX: tối đa 20 kết quả / request, tìm trên toàn bộ user (không chỉ 20 id đầu).
+     */
+    public function searchAssignableUsers(Request $request): JsonResponse
+    {
+        abort_unless($this->canAssignVpsToOtherUsers(Auth::user()), 403);
+
+        $data = $request->validate([
+            'q' => 'nullable|string|max:120',
+        ]);
+
+        $term = trim((string) ($data['q'] ?? ''));
+
+        $query = User::query()
+            ->select('id', 'name', 'email', 'balance')
+            ->orderBy('id')
+            ->limit(20);
+
+        if ($term !== '') {
+            $like = '%'.addcslashes($term, '%_\\').'%';
+            $query->where(function ($w) use ($like, $term) {
+                $w->where('name', 'like', $like)
+                    ->orWhere('email', 'like', $like);
+                if (ctype_digit($term)) {
+                    $w->orWhere('id', (int) $term);
+                }
+            });
+        }
+
+        $users = $query->get();
+
+        return response()->json([
+            'results' => $users->map(static function (User $u) {
+                return [
+                    'id' => (string) $u->id,
+                    'text' => sprintf('#%d — %s — %s', $u->id, $u->name, $u->email),
+                    'balance' => (int) ($u->balance ?? 0),
+                ];
+            })->values()->all(),
+        ]);
     }
 
     public function previewVoucher(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'plan' => 'required|string',
+            'plan' => ['required', 'string', Rule::in($this->pricingService->planKeysSelectableByUser(Auth::user()))],
             'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
             'voucher_code' => 'nullable|string|max:50',
             'user_id' => [
-                Rule::requiredIf(Auth::user()->is_admin),
+                Rule::requiredIf($this->canAssignVpsToOtherUsers(Auth::user())),
                 'nullable',
                 'integer',
                 Rule::exists('users', 'id'),
             ],
         ]);
 
-        $voucherUser = Auth::user()->is_admin
+        $voucherUser = $this->canAssignVpsToOtherUsers(Auth::user())
             ? User::findOrFail((int) $data['user_id'])
             : Auth::user();
 
         $plans = $this->pricingService->getPlans();
-        $planId = array_key_exists($data['plan'], $plans) ? $data['plan'] : 'plan_mini';
+        $planId = $data['plan'];
         $plan = $plans[$planId];
         $duration = (int) $data['duration'];
         $subtotal = $this->pricingService->calculatePrice($plan, $duration);
@@ -808,7 +864,7 @@ class VpsController extends Controller
     {
         $request->validate([
             'name'     => 'required|string|min:3|max:32|regex:/^[a-z]([a-z0-9-]{1,30}[a-z0-9])$/|unique:vps_instances,name',
-            'plan'     => 'required',
+            'plan'     => ['required', 'string', Rule::in($this->pricingService->planKeysSelectableByUser(Auth::user()))],
             'os_image' => [
                 'required',
                 'string',
@@ -823,14 +879,14 @@ class VpsController extends Controller
             'duration' => ['required', 'integer', Rule::in($this->allowedDurationsForUser(Auth::user()))],
             'voucher_code' => 'nullable|string|max:50',
             'user_id' => [
-                Rule::requiredIf(Auth::user()->is_admin),
+                Rule::requiredIf($this->canAssignVpsToOtherUsers(Auth::user())),
                 'nullable',
                 'integer',
                 Rule::exists('users', 'id'),
             ],
         ]);
 
-        $ownerUserId = Auth::user()->is_admin
+        $ownerUserId = $this->canAssignVpsToOtherUsers(Auth::user())
             ? (int) $request->input('user_id')
             : Auth::id();
 
@@ -850,8 +906,8 @@ class VpsController extends Controller
 
         $plans = $this->pricingService->getPlans();
 
-        $plan       = $plans[$request->plan] ?? $plans['plan_mini'];
-        $planId     = array_key_exists($request->plan, $plans) ? $request->plan : 'plan_mini';
+        $planId     = $request->plan;
+        $plan       = $plans[$planId];
         $zone       = $request->zone;
         $duration   = (int) $request->duration;
         $basePrice  = $this->pricingService->calculatePrice($plan, $duration);
@@ -1290,7 +1346,8 @@ class VpsController extends Controller
 
             return back()->with('success', 'Mật khẩu đã được đổi thành công và lưu vào Hệ thống. Quá trình reboot sẽ mất vài chục giây để máy chủ áp dụng cấu hình mới.');
         } catch (\Exception $e) {
-            return back()->with('error', 'Lỗi đổi mật khẩu: ' . $e->getMessage());
+            return back()->with('error', 'Lỗi đổi mật khẩu: Vui lòng kiểm tra lại VPS đang chạy và thử lại.');
+            // return back()->with('error', 'Lỗi đổi mật khẩu: ' . $e->getMessage());
         }
     }
 

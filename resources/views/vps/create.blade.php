@@ -8,33 +8,24 @@
 @php
     $selectedPlan = old('plan', 'plan_mini');
     $selectedVoucher = old('voucher_code', '');
-    $isAdmin = (bool) (Auth::user()->is_admin ?? false);
-    $assignableUsers = $isAdmin ? collect($adminAssignableUsers ?? []) : collect();
-    $selectedOwnerId = (int) old('user_id', Auth::id());
-    if ($isAdmin && !$assignableUsers->contains('id', $selectedOwnerId)) {
-        $selectedOwnerId = (int) Auth::id();
-    }
-    $ownerBalances = $assignableUsers->mapWithKeys(fn ($user) => [(string) $user->id => (int) ($user->balance ?? 0)]);
-    $balance = $isAdmin
-        ? (int) ($ownerBalances[(string) $selectedOwnerId] ?? (Auth::user()->balance ?? 0))
+    /** is_admin = 1: gán VPS + Select2 AJAX (tối đa 20 kết quả mỗi lần gõ; tìm trên toàn DB). */
+    $selectedOwnerId = $canAssignVps && isset($ownerUserPreselect)
+        ? (int) $ownerUserPreselect->id
+        : (int) Auth::id();
+    $ownerBalances = $canAssignVps && $ownerUserPreselect
+        ? [(string) $ownerUserPreselect->id => (int) ($ownerUserPreselect->balance ?? 0)]
+        : [];
+    $balance = $canAssignVps && $ownerUserPreselect
+        ? (int) ($ownerUserPreselect->balance ?? 0)
         : (int) (Auth::user()->balance ?? 0);
-    $durationOptions = $isAdmin
-        ? [
-            1 => '1 ngày',
-            7 => '7 ngày',
-            30 => '1 tháng',
-            90 => '3 tháng',
-            180 => '6 tháng',
-            365 => '1 năm (-15%)',
-        ]
-        : [
-            1 => '1 ngày',
-            7 => '7 ngày',
-            30 => '1 tháng',
-            90 => '3 tháng',
-            180 => '6 tháng',
-            365 => '1 năm (-15%)',
-        ];
+    $durationOptions = [
+        1 => '1 ngày',
+        7 => '7 ngày',
+        30 => '1 tháng',
+        90 => '3 tháng',
+        180 => '6 tháng',
+        365 => '1 năm (-15%)',
+    ];
     $selectedDuration = (int) old('duration', 30);
     if (!array_key_exists($selectedDuration, $durationOptions)) {
         $selectedDuration = array_key_first($durationOptions);
@@ -44,7 +35,7 @@
             'name' => $plan['name'],
             'price' => (int) ($plan['price_per_month'] ?? $plan['price_per_day'] ?? 0),
             'cpu' => $plan['api_cores'] ?? $plan['cores'] ?? 0,
-            'ram' => $plan['api_ram'] ?? $plan['ram'] ?? 0,
+            'ram' => $plan['ram'] ?? $plan['api_ram'] ?? 0,
             'disk' => $plan['disk'] ?? 0,
         ];
     });
@@ -109,13 +100,13 @@
                     </div>
                 </x-ui.card>
 
-                @if($isAdmin)
+                @if($canAssignVps)
                     <x-ui.card padding="md">
                         <div class="mb-3 flex items-start gap-3">
                             <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-danger-600 font-mono text-sm font-bold text-white">A</span>
                             <div>
                                 <h2 class="mb-1 text-lg font-bold text-slate-950">Gan VPS cho user</h2>
-                                <p class="mb-0 text-sm text-slate-500">Admin tao ho VPS cho tai khoan duoc chon. Chi phi se tru vao so du cua tai khoan nay.</p>
+                                <p class="mb-0 text-sm text-slate-500">Gõ tên, email hoặc ID để tìm user (mỗi lần tối đa 20 kết quả). Chi phí trừ vào số dư tài khoản được chọn.</p>
                             </div>
                         </div>
 
@@ -123,18 +114,17 @@
                             <div>
                                 <label for="user_id" class="mb-2 block text-sm font-semibold text-slate-700">Tai khoan nhan VPS</label>
                                 <select
+                                    x-ref="ownerUserSelect"
                                     id="user_id"
                                     name="user_id"
-                                    class="block min-h-12 w-full rounded-lg border-slate-300 bg-white text-sm shadow-sm ui-focus"
-                                    x-model="ownerUserId"
-                                    x-on:change="setOwnerUser(ownerUserId)"
+                                    class="block min-h-12 w-full rounded-lg border-slate-300 bg-white text-sm shadow-sm ui-focus vps-owner-select"
                                     required
                                 >
-                                    @foreach($assignableUsers as $user)
-                                        <option value="{{ $user->id }}" @selected((int) $selectedOwnerId === (int) $user->id)>
-                                            #{{ $user->id }} - {{ $user->name }} ({{ $user->email }})
+                                    @if($canAssignVps && $ownerUserPreselect)
+                                        <option value="{{ $ownerUserPreselect->id }}" selected>
+                                            #{{ $ownerUserPreselect->id }} — {{ $ownerUserPreselect->name }} — {{ $ownerUserPreselect->email }}
                                         </option>
-                                    @endforeach
+                                    @endif
                                 </select>
                             </div>
                             <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
@@ -350,6 +340,9 @@
 @endsection
 
 @push('styles')
+@if($canAssignVps)
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/css/select2.min.css" crossorigin="anonymous" />
+@endif
 <style>
     .vps-create-page {
         padding-bottom: 2rem;
@@ -413,10 +406,33 @@
             transform: rotate(360deg);
         }
     }
+
+    @if($canAssignVps)
+    .vps-create-page .select2-container {
+        width: 100% !important;
+    }
+    .vps-create-page .select2-container--default .select2-selection--single {
+        min-height: 48px;
+        border-color: #cbd5e1;
+        border-radius: 0.5rem;
+        padding: 6px 10px;
+    }
+    .vps-create-page .select2-container--default .select2-selection--single .select2-selection__rendered {
+        line-height: 34px;
+        padding-left: 0;
+    }
+    .vps-create-page .select2-container--default .select2-selection--single .select2-selection__arrow {
+        height: 46px;
+    }
+    @endif
 </style>
 @endpush
 
 @push('scripts')
+@if($canAssignVps)
+<script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/js/select2.min.js" crossorigin="anonymous"></script>
+@endif
 <script>
     window.vpsCreatePage = function () {
         return {
@@ -428,6 +444,7 @@
             ownerBalances: @json($ownerBalances),
             voucherPreviewUrl: @json(route('vps.voucher.preview')),
             csrfToken: @json(csrf_token()),
+            ownerUserSearchUrl: @json($canAssignVps ? route('vps.assignable-users.search') : ''),
             plans: @json($planPayload),
             balance: @json($balance),
             submitting: false,
@@ -436,6 +453,54 @@
             voucherValid: false,
             voucherMessage: '',
             discountAmount: 0,
+            init() {
+                if (!@json($canAssignVps)) {
+                    return;
+                }
+                var self = this;
+                queueMicrotask(function () {
+                    var el = self.$refs.ownerUserSelect;
+                    if (!el || !window.jQuery || !window.jQuery.fn.select2) {
+                        return;
+                    }
+                    var $el = window.jQuery(el);
+                    if ($el.data('select2')) {
+                        return;
+                    }
+                    if (!self.ownerUserSearchUrl) {
+                        return;
+                    }
+                    $el.select2({
+                        width: '100%',
+                        dropdownParent: window.jQuery('.vps-create-page'),
+                        placeholder: 'Gõ tên, email hoặc ID...',
+                        minimumInputLength: 0,
+                        ajax: {
+                            url: self.ownerUserSearchUrl,
+                            dataType: 'json',
+                            delay: 280,
+                            data: function (params) {
+                                return { q: params.term || '' };
+                            },
+                            processResults: function (data) {
+                                return {
+                                    results: data.results || [],
+                                    pagination: { more: false },
+                                };
+                            },
+                        },
+                    });
+                    $el.off('change.vpsOwner').on('change.vpsOwner', function () {
+                        var row = $el.select2('data')[0];
+                        if (row && typeof row.balance !== 'undefined') {
+                            self.ownerBalances = Object.assign({}, self.ownerBalances, {
+                                [String(row.id)]: Number(row.balance),
+                            });
+                        }
+                        self.setOwnerUser(window.jQuery(this).val());
+                    });
+                });
+            },
             setOwnerUser: function (value) {
                 this.ownerUserId = String(value || '');
                 this.balance = Number(this.ownerBalances[this.ownerUserId] || 0);
